@@ -253,39 +253,55 @@ export async function fetchLeaderboard(
 // Response: { total: number, date: string, prompts: [{ prompt, volume, type, answer: { text, links } }] }
 //
 // Fetches for all 5 engines in parallel, deduplicates by prompt text, then classifies.
+async function fetchOneEngine(
+  apiKey: string,
+  brand: string,
+  source: string,
+  engine: Engine
+): Promise<Array<{ prompt: string; volume: number; type: string }>> {
+  const url = new URL(`${BASE_URL}/ai-search/prompts-by-brand`);
+  url.searchParams.set("brand", brand);
+  url.searchParams.set("source", source.toLowerCase());
+  url.searchParams.set("engine", engine);
+  url.searchParams.set("limit", "50");
+  url.searchParams.set("sort", "volume");
+  url.searchParams.set("sort_order", "desc");
+
+  const res = await fetch(url.toString(), { headers: authHeaders(apiKey), cache: "no-store" });
+  if (!res.ok) return [];
+
+  const data = await res.json() as {
+    prompts?: Array<{ prompt: string; volume: number; type: string }>;
+  };
+  return data.prompts ?? [];
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+// Fetches prompts for all engines sequentially (one request at a time) to
+// avoid hitting SE Ranking's rate limit. Each engine call is separated by
+// `delayMs` milliseconds.
 export async function fetchPromptsByBrand(
   apiKey: string,
   brand: string,
-  source: string
+  source: string,
+  delayMs = 250
 ): Promise<{ positive: string[]; neutral: string[]; negative: string[] }> {
   const classified = { positive: [] as string[], neutral: [] as string[], negative: [] as string[] };
   const seen = new Set<string>();
 
-  await Promise.all(
-    ENGINES.map(async (engine) => {
-      const url = new URL(`${BASE_URL}/ai-search/prompts-by-brand`);
-      url.searchParams.set("brand", brand);
-      url.searchParams.set("source", source.toLowerCase());
-      url.searchParams.set("engine", engine);
-      url.searchParams.set("limit", "50");
-      url.searchParams.set("sort", "volume");
-      url.searchParams.set("sort_order", "desc");
-
-      const res = await fetch(url.toString(), { headers: authHeaders(apiKey), cache: "no-store" });
-      if (!res.ok) return; // skip failing engines rather than aborting everything
-
-      const data = await res.json() as {
-        prompts?: Array<{ prompt: string; volume: number; type: string }>;
-      };
-
-      for (const item of data.prompts ?? []) {
-        const q = item.prompt?.trim();
-        if (!q || seen.has(q)) continue;
-        seen.add(q);
-        classified[classifyQuery(q)].push(q);
-      }
-    })
-  );
+  for (let i = 0; i < ENGINES.length; i++) {
+    if (i > 0) await sleep(delayMs);
+    const items = await fetchOneEngine(apiKey, brand, source, ENGINES[i]);
+    for (const item of items) {
+      const q = item.prompt?.trim();
+      if (!q || seen.has(q)) continue;
+      seen.add(q);
+      classified[classifyQuery(q)].push(q);
+    }
+  }
 
   return classified;
 }

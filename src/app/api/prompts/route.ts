@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
     const result = [];
 
     for (let i = 0; i < brands.length; i++) {
-      if (i > 0) await sleep(350);
+      if (i > 0) await sleep(500);
       const brand = brands[i];
       const prompts = await fetchPromptsByBrand(apiKey, brand, source);
       result.push({ brand, ...scorePrompts(prompts), prompts });
