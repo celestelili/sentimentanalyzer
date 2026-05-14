@@ -156,7 +156,7 @@ export async function discoverBrand(
   domain: string,
   source: string
 ): Promise<string> {
-  const url = new URL(`${BASE_URL}/ai-search/brand/discover`);
+  const url = new URL(`${BASE_URL}/ai-search/discover-brand`);
   url.searchParams.set("target", domain);
   url.searchParams.set("source", source.toLowerCase());
   url.searchParams.set("scope", "base_domain");
@@ -249,7 +249,7 @@ export async function fetchPromptsByBrand(
 
   await Promise.all(
     ENGINES.map(async (engine) => {
-      const url = new URL(`${BASE_URL}/ai-search/prompts/by-brand`);
+      const url = new URL(`${BASE_URL}/ai-search/prompts-by-brand`);
       url.searchParams.set("brand", brand);
       url.searchParams.set("source", source.toLowerCase());
       url.searchParams.set("engine", engine);
