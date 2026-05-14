@@ -347,42 +347,6 @@ export default function HomePage() {
   const [promptsResult, setPrompts]       = useState<PromptsResult | null>(null);
   const [promptsError, setPromptsError]   = useState<string | null>(null);
 
-  const runAnalysis = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    setOverview(null);
-    setPrompts(null);
-    setPromptsError(null);
-    setActiveTab("overview");
-    setStatus("Fetching AI visibility data…");
-    try {
-      const trimmedKey = apiKey.trim();
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          apiKey:       trimmedKey || undefined,
-          country,
-          targetDomain: targetDomain.trim() || undefined,
-          competitor1:  competitor1.trim() || undefined,
-          competitor2:  competitor2.trim() || undefined,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Request failed");
-      setOverview(data);
-      setStatus(data.demo
-        ? "Showing demo data. Add an API key for live results."
-        : "Overview loaded. Open Query Intelligence for full trust scores.");
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Unknown error";
-      setError(msg);
-      setStatus("Analysis failed.");
-    } finally {
-      setLoading(false);
-    }
-  }, [apiKey, country, targetDomain, competitor1, competitor2]);
-
   const loadPrompts = useCallback(async (overview: OverviewResult) => {
     setPromptsLoad(true);
     setPromptsError(null);
@@ -400,7 +364,9 @@ export default function HomePage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Request failed");
       setPrompts(data);
-      setStatus("Analysis complete.");
+      setStatus(data.demo
+        ? "Showing demo data. Add an API key for live results."
+        : "Analysis complete.");
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Unknown error";
       setPromptsError(msg);
@@ -409,12 +375,48 @@ export default function HomePage() {
     }
   }, [apiKey]);
 
+  const runAnalysis = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setOverview(null);
+    setPrompts(null);
+    setPromptsError(null);
+    setActiveTab("overview");
+    setStatus("Fetching AI visibility data…");
+    try {
+      const trimmedKey = apiKey.trim();
+      const body = {
+        apiKey:       trimmedKey || undefined,
+        country,
+        targetDomain: targetDomain.trim() || undefined,
+        competitor1:  competitor1.trim() || undefined,
+        competitor2:  competitor2.trim() || undefined,
+      };
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Request failed");
+      setOverview(data);
+      setStatus(data.demo
+        ? "Showing demo data. Add an API key for live results."
+        : "Loading query intelligence…");
+      // kick off prompts immediately in the background
+      loadPrompts(data);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Unknown error";
+      setError(msg);
+      setStatus("Analysis failed.");
+    } finally {
+      setLoading(false);
+    }
+  }, [apiKey, country, targetDomain, competitor1, competitor2, loadPrompts]);
+
   const handleTabClick = useCallback((tab: "overview" | "intelligence") => {
     setActiveTab(tab);
-    if (tab === "intelligence" && overviewResult && !promptsResult && !promptsLoading) {
-      loadPrompts(overviewResult);
-    }
-  }, [overviewResult, promptsResult, promptsLoading, loadPrompts]);
+  }, []);
 
   const clear = useCallback(() => {
     setApiKey(""); setCountry("US"); setTarget(""); setComp1(""); setComp2("");
