@@ -142,8 +142,24 @@ async function seRequest<T>(
     next: { revalidate: 0 },
   });
   if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new Error(`SE Ranking API error ${res.status}: ${text}`);
+    const FRIENDLY: Record<number, string> = {
+      401: "Invalid API key — check your SE Ranking credentials.",
+      403: "Your SE Ranking plan doesn't include API access for this endpoint.",
+      429: "SE Ranking rate limit reached — wait a moment and try again.",
+    };
+    if (FRIENDLY[res.status]) throw new Error(FRIENDLY[res.status]);
+
+    // Parse JSON error if available, otherwise strip any HTML and truncate
+    const body = await res.text().catch(() => "");
+    let detail = body;
+    try {
+      const json = JSON.parse(body);
+      detail = json.message ?? json.error ?? JSON.stringify(json);
+    } catch {
+      // not JSON — strip HTML tags and collapse whitespace
+      detail = body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
+    }
+    throw new Error(`SE Ranking error ${res.status}${detail ? `: ${detail}` : "."}`);
   }
   return res.json();
 }
