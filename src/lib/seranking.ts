@@ -89,11 +89,11 @@ export function scoreBrand(
   const allQueries = [...prompts.positive, ...prompts.neutral, ...prompts.negative];
   const total = allQueries.length;
 
-  const visibility        = clamp((avg / Math.max(maxAvgSOV, 1)) * 100);
+  const visibility         = clamp((avg / Math.max(maxAvgSOV, 1)) * 100);
   const negativeQueryShare = clamp(100 - (prompts.negative.length / Math.max(total, 1)) * 100);
-  const reviewRiskCount   = allQueries.filter((q) => REVIEW_RISK_PATTERNS.some((p) => p.test(q))).length;
-  const reviewRisk        = clamp(100 - (reviewRiskCount / Math.max(total, 1)) * 100);
-  const persuasionCount   = allQueries.filter((q) => PERSUASION_PATTERNS.some((p) => p.test(q))).length;
+  const reviewRiskCount    = allQueries.filter((q) => REVIEW_RISK_PATTERNS.some((p) => p.test(q))).length;
+  const reviewRisk         = clamp(100 - (reviewRiskCount / Math.max(total, 1)) * 100);
+  const persuasionCount    = allQueries.filter((q) => PERSUASION_PATTERNS.some((p) => p.test(q))).length;
   const persuasionStrength = clamp((persuasionCount / Math.max(total, 1)) * 100);
   const trustExposureScore = clamp((visibility + negativeQueryShare + reviewRisk + persuasionStrength) / 4);
 
@@ -114,16 +114,25 @@ export function scoreBrand(
 
 const BASE_URL = "https://api.seranking.com/v1";
 
-const ALL_ENGINES = ["chatgpt", "perplexity", "gemini", "ai-overview", "ai-mode"] as const;
-type Engine = typeof ALL_ENGINES[number];
+const ENGINES = ["chatgpt", "perplexity", "gemini", "ai-overview", "ai-mode"] as const;
+type Engine = typeof ENGINES[number];
 
-function authHeaders(apiKey: string) {
+// Map from API engine key (with hyphen) to our EngineSOV key (with underscore)
+const ENGINE_KEY_MAP: Record<Engine, keyof EngineSOV> = {
+  "chatgpt":    "chatgpt",
+  "perplexity": "perplexity",
+  "gemini":     "gemini",
+  "ai-overview":"ai_overview",
+  "ai-mode":    "ai_mode",
+};
+
+function authHeaders(apiKey: string): Record<string, string> {
   return { Authorization: `Token ${apiKey}`, "Content-Type": "application/json" };
 }
 
 async function handleError(res: Response): Promise<never> {
   const FRIENDLY: Record<number, string> = {
-    401: "Invalid API key — check your SE Ranking credentials and make sure the key has API access enabled.",
+    401: "Invalid API key — check your SE Ranking credentials and ensure API access is enabled on your plan.",
     403: "Access denied — your SE Ranking plan may not include this API endpoint.",
     429: "SE Ranking rate limit reached — wait a moment and try again.",
   };
@@ -140,29 +149,35 @@ async function handleError(res: Response): Promise<never> {
   throw new Error(`SE Ranking error ${res.status}${detail ? `: ${detail}` : "."}`);
 }
 
-// Resolve a domain to the brand name SE Ranking associates with it
+// GET /ai-search/brand/discover
+// Response: { brands: string[] }
 export async function discoverBrand(
   apiKey: string,
   domain: string,
-  source: string        // lowercase alpha-2, e.g. "us"
+  source: string
 ): Promise<string> {
   const url = new URL(`${BASE_URL}/ai-search/brand/discover`);
   url.searchParams.set("target", domain);
   url.searchParams.set("source", source.toLowerCase());
   url.searchParams.set("scope", "base_domain");
 
-  const res = await fetch(url.toString(), {
-    headers: authHeaders(apiKey),
-    cache: "no-store",
-  });
+  const res = await fetch(url.toString(), { headers: authHeaders(apiKey), cache: "no-store" });
   if (!res.ok) await handleError(res);
 
-  const data = await res.json() as { brand?: string; name?: string };
-  // Fall back to capitalising the domain name if the API doesn't return one
-  return data.brand ?? data.name ?? domain.split(".")[0].replace(/^./, (c) => c.toUpperCase());
+  const data = await res.json() as { brands?: string[] };
+  // Fall back to capitalising the hostname if the API returns nothing
+  return data.brands?.[0] ?? domain.split(".")[0].replace(/^(.)/, (c) => c.toUpperCase());
 }
 
-// POST leaderboard — returns SOV per engine for each brand
+// POST /ai-search/overview/leaderboard
+// Response: {
+//   results: { [domain]: { [engine]: { brand_presence: number, link_presence: number } } },
+//   leaderboard: [{ domain, share_of_voice (0–1), rank, brand_presence, link_presence }]
+// }
+//
+// Per-engine SOV is calculated from brand_presence:
+//   engine_total = sum of brand_presence across all domains for that engine
+//   domain_sov   = (domain_brand_presence / engine_total) * 100
 export async function fetchLeaderboard(
   apiKey: string,
   primary: { target: string; brand: string },
@@ -176,7 +191,7 @@ export async function fetchLeaderboard(
       primary,
       competitors,
       source: source.toLowerCase(),
-      engines: ALL_ENGINES,
+      engines: [...ENGINES],
       scope: "base_domain",
     }),
     cache: "no-store",
@@ -184,42 +199,46 @@ export async function fetchLeaderboard(
   if (!res.ok) await handleError(res);
 
   const data = await res.json() as {
-    brands?: Array<{
-      brand: string;
-      engines: Record<Engine, { share_of_voice?: number; sov?: number }>;
-    }>;
-    // alternate shape
-    items?: Array<{
-      brand: string;
-      shares?: Record<string, number>;
-      engines?: Record<Engine, { share_of_voice?: number; sov?: number }>;
-    }>;
+    results: Record<string, Record<string, { brand_presence: number; link_presence: number }>>;
+    leaderboard: Array<{ domain: string; share_of_voice: number; rank: number }>;
   };
 
-  const rows = data.brands ?? data.items ?? [];
-  return rows.map((row) => {
-    const sov = (engine: Engine): number => {
-      if (row.engines) {
-        const e = row.engines[engine];
-        return e ? (e.share_of_voice ?? e.sov ?? 0) : 0;
-      }
-      if ("shares" in row && row.shares) return row.shares[engine] ?? 0;
-      return 0;
-    };
-    return {
-      brand: row.brand,
-      sov: {
-        chatgpt:     sov("chatgpt"),
-        perplexity:  sov("perplexity"),
-        gemini:      sov("gemini"),
-        ai_overview: sov("ai-overview"),
-        ai_mode:     sov("ai-mode"),
-      },
-    };
+  // Build domain → brand map from what we passed in
+  const domainToBrand: Record<string, string> = {
+    [primary.target]: primary.brand,
+    ...Object.fromEntries(competitors.map((c) => [c.target, c.brand])),
+  };
+
+  // For each engine, compute total brand_presence across all domains
+  const engineTotals: Partial<Record<Engine, number>> = {};
+  for (const engine of ENGINES) {
+    engineTotals[engine] = Object.values(data.results).reduce(
+      (sum, domainData) => sum + (domainData[engine]?.brand_presence ?? 0),
+      0
+    );
+  }
+
+  // Sort by leaderboard rank
+  const ranked = [...data.leaderboard].sort((a, b) => a.rank - b.rank);
+
+  return ranked.map(({ domain }) => {
+    const domainData = data.results[domain] ?? {};
+    const sov: EngineSOV = { chatgpt: 0, perplexity: 0, gemini: 0, ai_overview: 0, ai_mode: 0 };
+
+    for (const engine of ENGINES) {
+      const presence = domainData[engine]?.brand_presence ?? 0;
+      const total    = engineTotals[engine] ?? 0;
+      sov[ENGINE_KEY_MAP[engine]] = total > 0 ? Math.round((presence / total) * 100) : 0;
+    }
+
+    return { brand: domainToBrand[domain] ?? domain, sov };
   });
 }
 
-// GET prompts by brand — fetches across all engines and classifies them
+// GET /ai-search/prompts/by-brand
+// Response: { total: number, date: string, prompts: [{ prompt, volume, type, answer: { text, links } }] }
+//
+// Fetches for all 5 engines in parallel, deduplicates by prompt text, then classifies.
 export async function fetchPromptsByBrand(
   apiKey: string,
   brand: string,
@@ -229,27 +248,24 @@ export async function fetchPromptsByBrand(
   const seen = new Set<string>();
 
   await Promise.all(
-    ALL_ENGINES.map(async (engine) => {
+    ENGINES.map(async (engine) => {
       const url = new URL(`${BASE_URL}/ai-search/prompts/by-brand`);
       url.searchParams.set("brand", brand);
       url.searchParams.set("source", source.toLowerCase());
       url.searchParams.set("engine", engine);
       url.searchParams.set("limit", "50");
+      url.searchParams.set("sort", "volume");
+      url.searchParams.set("sort_order", "desc");
 
-      const res = await fetch(url.toString(), {
-        headers: authHeaders(apiKey),
-        cache: "no-store",
-      });
-      if (!res.ok) return; // skip individual engine errors rather than failing everything
+      const res = await fetch(url.toString(), { headers: authHeaders(apiKey), cache: "no-store" });
+      if (!res.ok) return; // skip failing engines rather than aborting everything
 
       const data = await res.json() as {
-        prompts?: Array<string | { prompt?: string; text?: string; query?: string }>;
-        data?: Array<string | { prompt?: string; text?: string; query?: string }>;
+        prompts?: Array<{ prompt: string; volume: number; type: string }>;
       };
 
-      const items = data.prompts ?? data.data ?? [];
-      for (const item of items) {
-        const q = typeof item === "string" ? item : (item.prompt ?? item.text ?? item.query ?? "");
+      for (const item of data.prompts ?? []) {
+        const q = item.prompt?.trim();
         if (!q || seen.has(q)) continue;
         seen.add(q);
         classified[classifyQuery(q)].push(q);
