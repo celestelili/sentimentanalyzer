@@ -140,6 +140,14 @@ function authHeaders(apiKey: string): Record<string, string> {
   return { Authorization: `Token ${apiKey}`, "Content-Type": "application/json" };
 }
 
+function sleepMs(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function isRateLimit(status: number, text: string): boolean {
+  return status === 429 || (status === 500 && text.toLowerCase().includes("too many"));
+}
+
 async function handleError(res: Response): Promise<never> {
   const FRIENDLY: Record<number, string> = {
     401: "Invalid API key — check your SE Ranking credentials and ensure API access is enabled on your plan.",
@@ -156,11 +164,40 @@ async function handleError(res: Response): Promise<never> {
   } catch {
     detail = body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
   }
-  // SE Ranking sometimes returns 500 for rate-limit bursts
   if (detail.toLowerCase().includes("too many")) {
     throw new Error("Too many requests — SE Ranking rate limit hit. Wait a moment and try again.");
   }
   throw new Error(`SE Ranking error ${res.status}${detail ? `: ${detail}` : "."}`);
+}
+
+// Wraps fetch with up to `retries` automatic retries on rate-limit responses.
+// Waits 3 s, then 6 s, then 12 s before each successive retry.
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  retries = 3
+): Promise<Response> {
+  let delay = 3000;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const res = await fetch(url, init);
+    if (res.status !== 429 && !(res.status === 500)) return res;
+
+    // Peek at body to see if it's really a rate-limit 500
+    const text = await res.text().catch(() => "");
+    if (!isRateLimit(res.status, text)) {
+      // Re-wrap the consumed body so callers can still read it
+      return new Response(text, { status: res.status, headers: res.headers });
+    }
+
+    if (attempt === retries) {
+      return new Response(text, { status: res.status, headers: res.headers });
+    }
+
+    await sleepMs(delay);
+    delay *= 2;
+  }
+  // unreachable
+  return fetch(url, init);
 }
 
 // GET /ai-search/brand/discover
@@ -175,7 +212,7 @@ export async function discoverBrand(
   url.searchParams.set("source", source.toLowerCase());
   url.searchParams.set("scope", "base_domain");
 
-  const res = await fetch(url.toString(), { headers: authHeaders(apiKey), cache: "no-store" });
+  const res = await fetchWithRetry(url.toString(), { headers: authHeaders(apiKey), cache: "no-store" });
   if (!res.ok) await handleError(res);
 
   const data = await res.json() as { brands?: string[] };
@@ -198,7 +235,7 @@ export async function fetchLeaderboard(
   competitors: { target: string; brand: string }[],
   source: string
 ): Promise<LeaderboardEntry[]> {
-  const res = await fetch(`${BASE_URL}/ai-search/overview/leaderboard`, {
+  const res = await fetchWithRetry(`${BASE_URL}/ai-search/overview/leaderboard`, {
     method: "POST",
     headers: authHeaders(apiKey),
     body: JSON.stringify({
@@ -267,17 +304,13 @@ async function fetchOneEngine(
   url.searchParams.set("sort", "volume");
   url.searchParams.set("sort_order", "desc");
 
-  const res = await fetch(url.toString(), { headers: authHeaders(apiKey), cache: "no-store" });
+  const res = await fetchWithRetry(url.toString(), { headers: authHeaders(apiKey), cache: "no-store" });
   if (!res.ok) return [];
 
   const data = await res.json() as {
     prompts?: Array<{ prompt: string; volume: number; type: string }>;
   };
   return data.prompts ?? [];
-}
-
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
 // Fetches prompts for all engines sequentially (one request at a time) to
@@ -287,13 +320,13 @@ export async function fetchPromptsByBrand(
   apiKey: string,
   brand: string,
   source: string,
-  delayMs = 250
+  delayMs = 600
 ): Promise<{ positive: string[]; neutral: string[]; negative: string[] }> {
   const classified = { positive: [] as string[], neutral: [] as string[], negative: [] as string[] };
   const seen = new Set<string>();
 
   for (let i = 0; i < ENGINES.length; i++) {
-    if (i > 0) await sleep(delayMs);
+    if (i > 0) await sleepMs(delayMs);
     const items = await fetchOneEngine(apiKey, brand, source, ENGINES[i]);
     for (const item of items) {
       const q = item.prompt?.trim();

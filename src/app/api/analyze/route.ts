@@ -92,9 +92,11 @@ export async function POST(req: NextRequest) {
 
     const source = country.toLowerCase();
 
-    const brandNames = await Promise.all(
-      domains.map((d) => discoverBrand(apiKey!, d, source))
-    );
+    const brandNames: string[] = [];
+    for (const domain of domains) {
+      if (brandNames.length > 0) await new Promise<void>((r) => setTimeout(r, 600));
+      brandNames.push(await discoverBrand(apiKey!, domain, source));
+    }
 
     const primary     = { target: domains[0], brand: brandNames[0] };
     const competitors = domains.slice(1).map((d, i) => ({ target: d, brand: brandNames[i + 1] }));
