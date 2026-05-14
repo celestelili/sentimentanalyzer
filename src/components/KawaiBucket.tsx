@@ -11,9 +11,9 @@ interface KawaiBucketProps {
 }
 
 const CFG = {
-  positive: { fill: "#2A4A38", stroke: "#6EC99A", face: "#6EC99A", label: "Positive" },
-  neutral:  { fill: "#2A2547", stroke: "#9B8FD4", face: "#9B8FD4", label: "Neutral"  },
-  negative: { fill: "#4A2A2A", stroke: "#E08080", face: "#E08080", label: "Negative" },
+  positive: { fill: "#D4EDE0", stroke: "#2E7A50", face: "#2E7A50", label: "Positive" },
+  neutral:  { fill: "#DDD8EF", stroke: "#6B5FA8", face: "#6B5FA8", label: "Neutral"  },
+  negative: { fill: "#EDCECE", stroke: "#A03030", face: "#A03030", label: "Negative" },
 };
 
 export default function KawaiBucket({ type, count, pct, className = "" }: KawaiBucketProps) {

@@ -60,7 +60,7 @@ function ScoreBar({ value }: { value: number }) {
           <div
             key={i}
             className="w-2.5 h-2.5 rounded-sm"
-            style={{ backgroundColor: i < filled ? color : "#2E2847" }}
+            style={{ backgroundColor: i < filled ? color : "#DFD0BC" }}
           />
         ))}
       </div>
@@ -341,10 +341,6 @@ export default function HomePage() {
                     </option>
                   ))}
                 </select>
-                <p className="text-muted text-xs leading-relaxed pt-2.5 max-w-sm">
-                  AI Overview and AI Mode data is only available in select countries.
-                  Choosing the wrong country wastes API credits — pick where your audience is.
-                </p>
               </div>
             </div>
 
@@ -431,7 +427,7 @@ export default function HomePage() {
       {/* ── error ── */}
       {error && (
         <div className="px-8 mb-6">
-          <div className="bg-[#3A1E1E] border border-negative/40 rounded-lg px-5 py-3">
+          <div className="bg-[#F5D8D8] border border-negative/40 rounded-lg px-5 py-3">
             <p className="text-negative text-sm">{error}</p>
           </div>
         </div>
@@ -441,7 +437,7 @@ export default function HomePage() {
       {result && (
         <div className="px-8 pb-16 space-y-8 fade-up">
 
-          <div className="bg-[#1E1B2E] border border-purple-dim/40 rounded px-5 py-2.5 inline-flex items-center gap-3">
+          <div className="bg-surface border border-border rounded px-5 py-2.5 inline-flex items-center gap-3">
             {result.demo && (
               <>
                 <span className="text-purple text-xs uppercase tracking-widest">Demo mode</span>

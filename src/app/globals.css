@@ -9,8 +9,8 @@
 
 body {
   font-family: var(--font-dm-mono), monospace;
-  background-color: #13111C;
-  color: #E8E3F5;
+  background-color: #FAF0E4;
+  color: #2A1F14;
 }
 
 @keyframes fadeUp {
