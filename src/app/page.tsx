@@ -4,6 +4,18 @@ import { useState, useCallback } from "react";
 import KawaiBucket from "@/components/KawaiBucket";
 import type { BrandScore, EngineSOV } from "@/lib/seranking";
 
+// ─── types ────────────────────────────────────────────────────────────────────
+
+interface AnalysisResult {
+  demo: boolean;
+  domains: string[];
+  brands: BrandScore[];
+}
+
+// ─── constants ────────────────────────────────────────────────────────────────
+
+const ENGINES = ["chatgpt", "perplexity", "gemini", "ai_overview", "ai_mode"] as const;
+
 const ENGINE_LABELS: Record<keyof EngineSOV, string> = {
   chatgpt: "ChatGPT",
   perplexity: "Perplexity",
@@ -12,536 +24,447 @@ const ENGINE_LABELS: Record<keyof EngineSOV, string> = {
   ai_mode: "AI Mode",
 };
 
-const ENGINE_COLORS: Record<keyof EngineSOV, string> = {
-  chatgpt: "#10A37F",
-  perplexity: "#20B2AA",
-  gemini: "#4285F4",
-  ai_overview: "#EA4335",
-  ai_mode: "#FBBC05",
-};
-
-const SIGNAL_LABELS = [
-  { key: "visibility", label: "Visibility" },
-  { key: "negativeQueryShare", label: "Neg. Query Share" },
-  { key: "reviewRisk", label: "Review Risk" },
-  { key: "persuasionStrength", label: "Persuasion" },
+const TRUST_COLS = [
+  { key: "visibility",         label: "Visibility"              },
+  { key: "negativeQueryShare", label: "Neg. Query\n(Inverted)"  },
+  { key: "reviewRisk",         label: "Review Risk\n(Inverted)" },
+  { key: "persuasionStrength", label: "Persuasion"              },
 ] as const;
 
-interface AnalysisResult {
-  demo: boolean;
-  category: string;
-  brands: BrandScore[];
-}
+// ─── small components ─────────────────────────────────────────────────────────
 
-function ScoreRing({ score, size = 80 }: { score: number; size?: number }) {
-  const radius = (size - 10) / 2;
-  const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (score / 100) * circumference;
-
-  const color =
-    score >= 70 ? "#4A7C59" : score >= 45 ? "#C8A96E" : "#9B3A3A";
-
+function Label({ children }: { children: React.ReactNode }) {
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-      <circle
-        cx={size / 2}
-        cy={size / 2}
-        r={radius}
-        fill="none"
-        stroke="#E5E0D8"
-        strokeWidth="6"
-      />
-      <circle
-        cx={size / 2}
-        cy={size / 2}
-        r={radius}
-        fill="none"
-        stroke={color}
-        strokeWidth="6"
-        strokeLinecap="round"
-        strokeDasharray={circumference}
-        strokeDashoffset={offset}
-        transform={`rotate(-90 ${size / 2} ${size / 2})`}
-        className="score-ring"
-      />
-      <text
-        x={size / 2}
-        y={size / 2 + 1}
-        textAnchor="middle"
-        dominantBaseline="middle"
-        fill={color}
-        fontSize={size * 0.22}
-        fontFamily="var(--font-dm-mono)"
-        fontWeight="600"
-      >
-        {score}
-      </text>
-    </svg>
+    <p className="text-muted text-xs uppercase tracking-widest mb-1">{children}</p>
   );
 }
 
-function MiniBar({ value, color }: { value: number; color: string }) {
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="text-muted text-xs uppercase tracking-widest py-3 border-b border-border">
+      {children}
+    </p>
+  );
+}
+
+function ScoreBar({ value }: { value: number }) {
+  const color = value >= 70 ? "#6EC99A" : value >= 45 ? "#9B8FD4" : "#E08080";
+  const segments = 10;
+  const filled = Math.round((value / 100) * segments);
   return (
     <div className="flex items-center gap-2">
-      <div className="flex-1 h-1.5 bg-border rounded-full overflow-hidden">
-        <div
-          className="h-full rounded-full transition-all duration-700"
-          style={{ width: `${value}%`, backgroundColor: color }}
-        />
+      <div className="flex gap-0.5">
+        {Array.from({ length: segments }).map((_, i) => (
+          <div
+            key={i}
+            className="w-2.5 h-2.5 rounded-sm"
+            style={{ backgroundColor: i < filled ? color : "#2E2847" }}
+          />
+        ))}
       </div>
-      <span className="font-mono text-xs text-muted w-7 text-right">{value}</span>
+      <span className="text-sm font-semibold" style={{ color }}>{value}</span>
     </div>
   );
 }
 
-function SOVBar({ sov }: { sov: EngineSOV }) {
-  const engines = Object.keys(sov) as (keyof EngineSOV)[];
-  return (
-    <div className="space-y-2">
-      {engines.map((engine) => (
-        <div key={engine} className="flex items-center gap-2">
-          <span
-            className="font-mono text-xs w-24 shrink-0"
-            style={{ color: ENGINE_COLORS[engine] }}
-          >
-            {ENGINE_LABELS[engine]}
-          </span>
-          <div className="flex-1 h-2 bg-border rounded-full overflow-hidden">
-            <div
-              className="h-full rounded-full transition-all duration-700"
-              style={{
-                width: `${sov[engine]}%`,
-                backgroundColor: ENGINE_COLORS[engine],
-              }}
-            />
-          </div>
-          <span className="font-mono text-xs text-muted w-8 text-right">
-            {sov[engine]}%
-          </span>
-        </div>
-      ))}
-    </div>
-  );
+function SignalCell({ value }: { value: number }) {
+  const color = value >= 70 ? "#6EC99A" : value >= 45 ? "#9B8FD4" : "#E08080";
+  return <span style={{ color }} className="tabular-nums">{value}</span>;
 }
 
-function BrandCard({ brand, rank }: { brand: BrandScore; rank: number }) {
-  const [open, setOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"sov" | "signals" | "queries">("sov");
+// ─── SOV table ────────────────────────────────────────────────────────────────
 
-  const scoreColor =
-    brand.trustExposureScore >= 70
-      ? "text-positive"
-      : brand.trustExposureScore >= 45
-      ? "text-accent"
-      : "text-negative";
+function SOVTable({ brands }: { brands: BrandScore[] }) {
+  // find max per engine for highlight
+  const maxByEngine: Partial<Record<keyof EngineSOV, number>> = {};
+  for (const eng of ENGINES) {
+    maxByEngine[eng] = Math.max(...brands.map((b) => b.sov[eng]));
+  }
 
   return (
-    <div className="border border-border rounded-lg bg-white overflow-hidden fade-in">
-      {/* header row */}
-      <div
-        className="flex items-center gap-4 p-5 cursor-pointer hover:bg-cream transition-colors"
-        onClick={() => setOpen((p) => !p)}
-      >
-        <span className="font-mono text-sm text-muted w-5 shrink-0">{rank}.</span>
-
-        <div className="flex-1 min-w-0">
-          <h2 className="font-serif text-2xl font-semibold">{brand.brand}</h2>
-          <p className="font-mono text-xs text-muted mt-0.5">
-            Avg SOV {brand.avgSOV}% across engines
-          </p>
-        </div>
-
-        <div className="flex items-center gap-6 shrink-0">
-          <div className="hidden sm:block">
-            <ScoreRing score={brand.trustExposureScore} />
-          </div>
-          <div className={`font-mono text-xs font-medium ${scoreColor} hidden md:block`}>
-            Trust<br />Exposure
-          </div>
-
-          {/* sentiment pill summary */}
-          <div className="flex gap-2">
-            <span className="bg-[#D4EDDA] text-positive font-mono text-xs px-2 py-1 rounded-full">
-              +{brand.prompts.positive.length}
-            </span>
-            <span className="bg-[#E9ECEF] text-neutral font-mono text-xs px-2 py-1 rounded-full">
-              ~{brand.prompts.neutral.length}
-            </span>
-            <span className="bg-[#F8D7DA] text-negative font-mono text-xs px-2 py-1 rounded-full">
-              -{brand.prompts.negative.length}
-            </span>
-          </div>
-
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 16 16"
-            fill="none"
-            className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
-          >
-            <path d="M3 6l5 5 5-5" stroke="#6B6B6B" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </div>
-      </div>
-
-      {/* expanded detail */}
-      {open && (
-        <div className="border-t border-border">
-          {/* tabs */}
-          <div className="flex border-b border-border">
-            {(["sov", "signals", "queries"] as const).map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                className={`font-mono text-xs px-4 py-2.5 capitalize transition-colors ${
-                  activeTab === tab
-                    ? "border-b-2 border-ink text-ink"
-                    : "text-muted hover:text-ink"
-                }`}
-              >
-                {tab === "sov" ? "Share of Voice" : tab === "signals" ? "Trust Signals" : "Query Buckets"}
-              </button>
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-muted uppercase tracking-widest">
+            <th className="text-left py-2 pr-4 font-normal w-28">Brand</th>
+            {ENGINES.map((e) => (
+              <th key={e} className="text-center py-2 px-3 font-normal">
+                {ENGINE_LABELS[e]}
+              </th>
             ))}
-          </div>
-
-          <div className="p-5">
-            {activeTab === "sov" && (
-              <div>
-                <p className="font-mono text-xs text-muted mb-4 uppercase tracking-wider">
-                  AI Engine Citations — Share of Voice
-                </p>
-                <SOVBar sov={brand.sov} />
-              </div>
-            )}
-
-            {activeTab === "signals" && (
-              <div>
-                <p className="font-mono text-xs text-muted mb-4 uppercase tracking-wider">
-                  Trust Exposure Score breakdown (higher = better)
-                </p>
-                <div className="space-y-3">
-                  {SIGNAL_LABELS.map(({ key, label }) => (
-                    <div key={key}>
-                      <div className="flex justify-between mb-1">
-                        <span className="font-mono text-xs">{label}</span>
-                      </div>
-                      <MiniBar
-                        value={brand[key]}
-                        color={brand[key] >= 70 ? "#4A7C59" : brand[key] >= 45 ? "#C8A96E" : "#9B3A3A"}
-                      />
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-5 pt-4 border-t border-border flex items-center gap-3">
-                  <ScoreRing score={brand.trustExposureScore} size={64} />
-                  <div>
-                    <p className="font-mono text-xs text-muted">Trust Exposure Score</p>
-                    <p className="font-mono text-xs text-muted mt-1">
-                      Unweighted avg of 4 signals
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {activeTab === "queries" && (
-              <div>
-                <p className="font-mono text-xs text-muted mb-4 uppercase tracking-wider">
-                  Sampled prompts per sentiment bucket
-                </p>
-                <div className="grid grid-cols-3 gap-4 mb-6">
-                  <KawaiBucket type="positive" count={brand.prompts.positive.length} />
-                  <KawaiBucket type="neutral" count={brand.prompts.neutral.length} />
-                  <KawaiBucket type="negative" count={brand.prompts.negative.length} />
-                </div>
-
-                <div className="space-y-3">
-                  {(["positive", "neutral", "negative"] as const).map((bucket) => (
-                    <details key={bucket} className="group">
-                      <summary className="flex items-center justify-between cursor-pointer list-none py-2 border-t border-border">
-                        <span
-                          className="font-mono text-xs uppercase tracking-wider font-medium"
-                          style={{
-                            color:
-                              bucket === "positive"
-                                ? "#4A7C59"
-                                : bucket === "neutral"
-                                ? "#6B7280"
-                                : "#9B3A3A",
-                          }}
-                        >
-                          {bucket} queries ({brand.prompts[bucket].length})
-                        </span>
-                        <svg
-                          width="12"
-                          height="12"
-                          viewBox="0 0 12 12"
-                          fill="none"
-                          className="group-open:rotate-180 transition-transform shrink-0"
-                        >
-                          <path d="M2 4l4 4 4-4" stroke="#6B6B6B" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      </summary>
-                      <ul className="mt-2 space-y-1 pl-2">
-                        {brand.prompts[bucket].map((q, i) => (
-                          <li key={i} className="font-mono text-xs text-muted py-1 border-b border-border/50 last:border-0">
-                            &ldquo;{q}&rdquo;
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+          </tr>
+        </thead>
+        <tbody>
+          {brands.map((b, i) => (
+            <tr
+              key={b.brand}
+              className={`border-t border-border ${i === 0 ? "border-border-bright" : ""}`}
+            >
+              <td className="py-3 pr-4 font-semibold text-purple-bright text-sm">
+                {b.brand}
+              </td>
+              {ENGINES.map((eng) => {
+                const isMax = b.sov[eng] === maxByEngine[eng];
+                return (
+                  <td key={eng} className="py-3 px-3 text-center tabular-nums">
+                    {isMax ? (
+                      <span className="inline-block bg-surface border border-border-bright rounded px-2 py-0.5 text-text font-semibold">
+                        {b.sov[eng]}%
+                      </span>
+                    ) : (
+                      <span className="text-muted">{b.sov[eng]}%</span>
+                    )}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
+
+// ─── Trust Exposure table ─────────────────────────────────────────────────────
+
+function TrustTable({ brands }: { brands: BrandScore[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-muted uppercase tracking-widest">
+            <th className="text-left py-2 pr-4 font-normal w-28">Brand</th>
+            {TRUST_COLS.map((c) => (
+              <th key={c.key} className="text-center py-2 px-3 font-normal leading-tight whitespace-pre-line">
+                {c.label}
+              </th>
+            ))}
+            <th className="text-center py-2 px-3 font-normal">Trust Score</th>
+          </tr>
+        </thead>
+        <tbody>
+          {brands.map((b, i) => (
+            <tr
+              key={b.brand}
+              className={`border-t border-border ${i === 0 ? "border-border-bright" : ""}`}
+            >
+              <td className="py-3 pr-4 font-semibold text-purple-bright text-sm">
+                {b.brand}
+              </td>
+              {TRUST_COLS.map((c) => (
+                <td key={c.key} className="py-3 px-3 text-center">
+                  <SignalCell value={b[c.key]} />
+                </td>
+              ))}
+              <td className="py-3 px-3">
+                <ScoreBar value={b.trustExposureScore} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ─── Sentiment Breakdown ──────────────────────────────────────────────────────
+
+function SentimentSection({ brands }: { brands: BrandScore[] }) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  return (
+    <div>
+      {/* bucket icons + overall totals */}
+      <div className="flex gap-10 mb-8">
+        {(["positive", "neutral", "negative"] as const).map((t) => {
+          const total = brands.reduce((s, b) => s + b.prompts[t].length, 0);
+          const grand = brands.reduce(
+            (s, b) => s + b.prompts.positive.length + b.prompts.neutral.length + b.prompts.negative.length,
+            0
+          );
+          return (
+            <KawaiBucket
+              key={t}
+              type={t}
+              count={total}
+              pct={grand > 0 ? Math.round((total / grand) * 100) : 0}
+            />
+          );
+        })}
+      </div>
+
+      {/* per-brand query lists */}
+      <div className="space-y-1">
+        {brands.map((b) => {
+          const isOpen = expanded === b.brand;
+          return (
+            <div key={b.brand} className="border border-border rounded">
+              <button
+                className="w-full flex items-center justify-between px-4 py-2.5 text-left hover:bg-highlight transition-colors"
+                onClick={() => setExpanded(isOpen ? null : b.brand)}
+              >
+                <span className="text-sm font-semibold text-purple-bright">{b.brand}</span>
+                <div className="flex items-center gap-4">
+                  <span className="text-xs text-positive">+{b.prompts.positive.length}</span>
+                  <span className="text-xs text-neutral">~{b.prompts.neutral.length}</span>
+                  <span className="text-xs text-negative">−{b.prompts.negative.length}</span>
+                  <svg
+                    width="12" height="12" viewBox="0 0 12 12" fill="none"
+                    className={`transition-transform ${isOpen ? "rotate-180" : ""}`}
+                  >
+                    <path d="M2 4l4 4 4-4" stroke="#8A84A8" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </div>
+              </button>
+
+              {isOpen && (
+                <div className="border-t border-border px-4 pb-4 pt-3 grid grid-cols-3 gap-4 fade-up">
+                  {(["positive", "neutral", "negative"] as const).map((bucket) => {
+                    const colorMap = { positive: "#6EC99A", neutral: "#9B8FD4", negative: "#E08080" };
+                    return (
+                      <div key={bucket}>
+                        <p
+                          className="text-xs uppercase tracking-widest mb-2 font-medium"
+                          style={{ color: colorMap[bucket] }}
+                        >
+                          {bucket} ({b.prompts[bucket].length})
+                        </p>
+                        <ul className="space-y-1">
+                          {b.prompts[bucket].map((q, i) => (
+                            <li key={i} className="text-xs text-muted leading-relaxed">
+                              &ldquo;{q}&rdquo;
+                            </li>
+                          ))}
+                          {b.prompts[bucket].length === 0 && (
+                            <li className="text-xs text-muted italic">none</li>
+                          )}
+                        </ul>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function HomePage() {
-  const [apiKey, setApiKey] = useState("");
-  const [category, setCategory] = useState("televisions");
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<AnalysisResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [hasRun, setHasRun] = useState(false);
+  const [apiKey, setApiKey]         = useState("");
+  const [targetDomain, setTarget]   = useState("");
+  const [competitor1, setComp1]     = useState("");
+  const [competitor2, setComp2]     = useState("");
+  const [loading, setLoading]       = useState(false);
+  const [result, setResult]         = useState<AnalysisResult | null>(null);
+  const [error, setError]           = useState<string | null>(null);
+  const [status, setStatus]         = useState("Enter your details above to begin.");
+
+  const canRun = !loading;
 
   const runAnalysis = useCallback(async () => {
     setLoading(true);
     setError(null);
     setResult(null);
-    setHasRun(true);
+    setStatus("Fetching AI visibility data…");
     try {
       const trimmedKey = apiKey.trim();
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // Key is only sent over the encrypted HTTPS request body — never stored
-        // in localStorage, sessionStorage, or any client-side persistence.
-        body: JSON.stringify({ apiKey: trimmedKey || undefined, category }),
+        body: JSON.stringify({
+          apiKey: trimmedKey || undefined,
+          targetDomain: targetDomain.trim() || undefined,
+          competitor1: competitor1.trim() || undefined,
+          competitor2: competitor2.trim() || undefined,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Request failed");
       setResult(data);
+      setStatus(data.demo ? "Showing demo data. Add an API key for live results." : "Analysis complete.");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unknown error");
+      const msg = e instanceof Error ? e.message : "Unknown error";
+      setError(msg);
+      setStatus("Analysis failed.");
     } finally {
       setLoading(false);
     }
-  }, [apiKey, category]);
+  }, [apiKey, targetDomain, competitor1, competitor2]);
 
-  const top = result?.brands[0];
-  const topScore = top?.trustExposureScore ?? 0;
+  const clear = useCallback(() => {
+    setApiKey(""); setTarget(""); setComp1(""); setComp2("");
+    setResult(null); setError(null);
+    setStatus("Enter your details above to begin.");
+  }, []);
 
   return (
-    <main className="min-h-screen">
-      {/* masthead */}
-      <header className="border-b border-border bg-white">
-        <div className="max-w-5xl mx-auto px-5 py-8">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="font-mono text-xs text-muted uppercase tracking-widest mb-2">
-                CelesteSEO.com · Powered by SE Ranking
-              </p>
-              <h1 className="font-serif text-4xl md:text-5xl font-light leading-tight">
-                SERP Sentiment<br />
-                <span className="font-semibold">&amp; Trust Tracker</span>
-              </h1>
-              <p className="font-mono text-sm text-muted mt-3 max-w-lg leading-relaxed">
-                Not just whether brands show up — but <em>how</em> they show up across
-                ChatGPT, Perplexity, Gemini, AI Overview, and AI Mode.
-              </p>
-            </div>
-            <div className="hidden lg:block shrink-0 text-right">
-              <p className="font-mono text-xs text-muted">Trust Exposure Score</p>
-              <p className="font-mono text-xs text-muted text-right">4 signals · 0–100</p>
-            </div>
-          </div>
-        </div>
+    <main className="min-h-screen bg-bg text-text font-mono">
+
+      {/* ── header ── */}
+      <header className="px-8 pt-8 pb-6">
+        <h1 className="text-purple-bright font-serif text-3xl md:text-4xl font-bold tracking-tight">
+          SERP Sentiment and Trust Tracker ✿
+        </h1>
+        <p className="text-muted text-xs uppercase tracking-widest mt-1">
+          AI Visibility, Trust Exposure, and Sentiment Intelligence
+        </p>
       </header>
 
-      {/* controls */}
-      <section className="border-b border-border bg-cream">
-        <div className="max-w-5xl mx-auto px-5 py-5">
-          <div className="flex flex-col sm:flex-row gap-3">
-            <input
-              type="password"
-              placeholder="SE Ranking API key (leave blank for demo mode)"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              autoComplete="off"
-              spellCheck={false}
-              className="flex-1 font-mono text-sm border border-border rounded-md px-4 py-2.5 bg-white placeholder-muted/60 focus:outline-none focus:ring-2 focus:ring-ink/20"
-            />
-            <input
-              type="text"
-              placeholder="Category (e.g. televisions)"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              maxLength={80}
-              className="w-48 font-mono text-sm border border-border rounded-md px-4 py-2.5 bg-white placeholder-muted/60 focus:outline-none focus:ring-2 focus:ring-ink/20"
-            />
+      {/* ── input panel ── */}
+      <section className="px-8 pb-8">
+        <div className="bg-surface border border-border rounded-lg p-6 max-w-4xl">
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 mb-5">
+            {/* API key */}
+            <div className="sm:col-span-2">
+              <Label>SE Ranking API Key</Label>
+              <input
+                type="password"
+                placeholder="paste your API key here"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                className="w-full bg-input border border-border rounded px-4 py-2.5 text-sm text-text placeholder-muted focus:outline-none focus:border-border-bright transition-colors"
+              />
+            </div>
+
+            {/* target domain */}
+            <div>
+              <Label>Target Domain</Label>
+              <input
+                type="text"
+                placeholder="e.g. sony.com"
+                value={targetDomain}
+                onChange={(e) => setTarget(e.target.value)}
+                maxLength={120}
+                className="w-full bg-input border border-border rounded px-4 py-2.5 text-sm text-text placeholder-muted focus:outline-none focus:border-border-bright transition-colors"
+              />
+            </div>
+
+            {/* competitor 1 */}
+            <div>
+              <Label>Competitor 1</Label>
+              <input
+                type="text"
+                placeholder="e.g. samsung.com"
+                value={competitor1}
+                onChange={(e) => setComp1(e.target.value)}
+                maxLength={120}
+                className="w-full bg-input border border-border rounded px-4 py-2.5 text-sm text-text placeholder-muted focus:outline-none focus:border-border-bright transition-colors"
+              />
+            </div>
+
+            {/* competitor 2 */}
+            <div>
+              <Label>Competitor 2</Label>
+              <input
+                type="text"
+                placeholder="e.g. lg.com"
+                value={competitor2}
+                onChange={(e) => setComp2(e.target.value)}
+                maxLength={120}
+                className="w-full bg-input border border-border rounded px-4 py-2.5 text-sm text-text placeholder-muted focus:outline-none focus:border-border-bright transition-colors"
+              />
+            </div>
+          </div>
+
+          {/* actions row */}
+          <div className="flex items-center gap-4">
             <button
               onClick={runAnalysis}
-              disabled={loading}
-              className="font-mono text-sm bg-ink text-cream px-6 py-2.5 rounded-md hover:bg-ink/80 disabled:opacity-50 transition-colors whitespace-nowrap"
+              disabled={!canRun}
+              className="text-sm text-purple-bright border border-purple-dim rounded px-5 py-2 hover:bg-highlight disabled:opacity-40 transition-colors"
             >
-              {loading ? "Analyzing…" : "Run Analysis"}
+              {loading ? "Analyzing…" : "Run Analysis ›"}
             </button>
+            <button
+              onClick={clear}
+              className="text-sm text-muted hover:text-text transition-colors"
+            >
+              Clear
+            </button>
+            <span className="text-xs text-muted">{status}</span>
           </div>
-          {/* Privacy notice — always visible */}
-          <div className="flex items-start gap-2 mt-3">
-            <svg width="13" height="13" viewBox="0 0 13 13" fill="none" className="shrink-0 mt-0.5">
-              <path d="M6.5 1.5 C4 1.5 2 3.5 2 6 L2 8 C2 8.6 2.4 9 3 9 L10 9 C10.6 9 11 8.6 11 8 L11 6 C11 3.5 9 1.5 6.5 1.5Z" stroke="#6B6B6B" strokeWidth="1.2" fill="none"/>
-              <rect x="4.5" y="9" width="4" height="3" rx="0.5" stroke="#6B6B6B" strokeWidth="1.2" fill="none"/>
-              <circle cx="6.5" cy="10.5" r="0.6" fill="#6B6B6B"/>
-            </svg>
-            <p className="font-mono text-xs text-muted leading-relaxed">
-              Your API key is sent only over an encrypted HTTPS request, used server-side to call SE Ranking, and then discarded.
-              It is never logged, stored, or retained in any database, session, or file.
-              {!hasRun && " Leave it blank to run in demo mode."}
-            </p>
-          </div>
+
+          {/* privacy notice */}
+          <p className="text-muted text-xs mt-4 leading-relaxed">
+            🔒 Your API key is sent over HTTPS, used server-side to call SE Ranking, then discarded.
+            It is never logged, stored, or retained. Leave it blank to run in demo mode.
+          </p>
         </div>
       </section>
 
-      {/* results */}
-      <div className="max-w-5xl mx-auto px-5 py-8">
-        {error && (
-          <div className="bg-[#F8D7DA] border border-negative/30 rounded-lg p-4 mb-6">
-            <p className="font-mono text-sm text-negative">{error}</p>
+      {/* ── error ── */}
+      {error && (
+        <div className="px-8 mb-6">
+          <div className="bg-[#3A1E1E] border border-negative/40 rounded-lg px-5 py-3">
+            <p className="text-negative text-sm">{error}</p>
           </div>
-        )}
-
-        {result && (
-          <>
-            {/* summary strip */}
-            <div className="flex items-center justify-between mb-6 pb-4 border-b border-border">
-              <div>
-                <p className="font-mono text-xs text-muted uppercase tracking-wider">
-                  {result.demo ? "Demo mode · TV brands" : `Category: ${result.category}`}
-                </p>
-                <p className="font-serif text-2xl font-semibold mt-1">
-                  {result.brands.length} brands ranked
-                </p>
-              </div>
-              {top && (
-                <div className="text-right">
-                  <p className="font-mono text-xs text-muted">Top trust score</p>
-                  <p className="font-serif text-xl font-semibold text-positive">
-                    {top.brand} · {top.trustExposureScore}
-                  </p>
-                </div>
-              )}
-            </div>
-
-            {/* leaderboard bar */}
-            <div className="bg-white border border-border rounded-lg p-5 mb-6">
-              <p className="font-mono text-xs text-muted uppercase tracking-wider mb-4">
-                Trust Exposure Score — all brands
-              </p>
-              <div className="space-y-3">
-                {result.brands.map((brand) => (
-                  <div key={brand.brand} className="flex items-center gap-3">
-                    <span className="font-mono text-xs w-20 shrink-0">{brand.brand}</span>
-                    <div className="flex-1 h-3 bg-border rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-700"
-                        style={{
-                          width: `${brand.trustExposureScore}%`,
-                          backgroundColor:
-                            brand.trustExposureScore >= 70
-                              ? "#4A7C59"
-                              : brand.trustExposureScore >= 45
-                              ? "#C8A96E"
-                              : "#9B3A3A",
-                        }}
-                      />
-                    </div>
-                    <span className="font-mono text-xs text-muted w-6 text-right">
-                      {brand.trustExposureScore}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <div className="flex gap-4 mt-4 pt-3 border-t border-border">
-                {[
-                  { color: "#4A7C59", label: "Strong (70+)" },
-                  { color: "#C8A96E", label: "Moderate (45–69)" },
-                  { color: "#9B3A3A", label: "Weak (<45)" },
-                ].map(({ color, label }) => (
-                  <div key={label} className="flex items-center gap-1.5">
-                    <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />
-                    <span className="font-mono text-xs text-muted">{label}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* brand cards */}
-            <div className="space-y-3">
-              {result.brands.map((brand, i) => (
-                <BrandCard key={brand.brand} brand={brand} rank={i + 1} />
-              ))}
-            </div>
-
-            {/* scoring notes */}
-            <div className="mt-8 bg-white border border-border rounded-lg p-5">
-              <p className="font-mono text-xs text-muted uppercase tracking-wider mb-3">
-                Scoring methodology
-              </p>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {[
-                  { label: "Visibility", desc: "Avg SOV across engines, scaled to top brand" },
-                  { label: "Neg. Query Share", desc: "% negative prompts, inverted (higher = safer)" },
-                  { label: "Review Risk", desc: "% review/complaint language, inverted" },
-                  { label: "Persuasion", desc: "% buying-stage intent language" },
-                ].map(({ label, desc }) => (
-                  <div key={label}>
-                    <p className="font-mono text-xs font-semibold">{label}</p>
-                    <p className="font-mono text-xs text-muted mt-1 leading-relaxed">{desc}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
-
-        {!result && !loading && !error && (
-          <div className="text-center py-16">
-            <p className="font-serif text-3xl font-light text-muted mb-3">
-              Click <em>Run Analysis</em> to begin
-            </p>
-            <p className="font-mono text-sm text-muted">
-              No API key? Leave it blank — demo data loads automatically.
-            </p>
-          </div>
-        )}
-
-        {loading && (
-          <div className="text-center py-16">
-            <div className="inline-block w-8 h-8 border-2 border-ink border-t-transparent rounded-full animate-spin mb-4" />
-            <p className="font-mono text-sm text-muted">Fetching AI visibility data…</p>
-          </div>
-        )}
-      </div>
-
-      <footer className="border-t border-border mt-8 py-6">
-        <div className="max-w-5xl mx-auto px-5">
-          <p className="font-mono text-xs text-muted">
-            Built by Celeste Gonzalez,{" "}
-            <a href="https://celesteseo.com" className="underline hover:text-ink transition-colors">
-              CelesteSEO.com
-            </a>{" "}
-            · Data by{" "}
-            <a href="https://seranking.com" className="underline hover:text-ink transition-colors">
-              SE Ranking
-            </a>
-          </p>
         </div>
+      )}
+
+      {/* ── results ── */}
+      {result && (
+        <div className="px-8 pb-16 space-y-8 fade-up">
+
+          {result.demo && (
+            <div className="bg-[#1E1B2E] border border-purple-dim/40 rounded px-5 py-2.5 inline-flex items-center gap-2">
+              <span className="text-purple text-xs uppercase tracking-widest">Demo mode</span>
+              <span className="text-muted text-xs">— showing sample TV brand data</span>
+            </div>
+          )}
+
+          {/* SOV table */}
+          <div>
+            <SectionTitle>
+              Share of Voice by AI Engine (% of citations per engine per brand)
+            </SectionTitle>
+            <div className="bg-surface border border-border rounded-lg p-5 mt-3">
+              <SOVTable brands={result.brands} />
+            </div>
+          </div>
+
+          {/* Trust table */}
+          <div>
+            <SectionTitle>
+              Trust Exposure Score (unweighted average of four signals, 0 to 100)
+            </SectionTitle>
+            <div className="bg-surface border border-border rounded-lg p-5 mt-3">
+              <TrustTable brands={result.brands} />
+            </div>
+          </div>
+
+          {/* Sentiment buckets */}
+          <div>
+            <SectionTitle>
+              Sentiment Bucket Breakdown (share of queries by intent type per brand)
+            </SectionTitle>
+            <div className="bg-surface border border-border rounded-lg p-5 mt-3">
+              <SentimentSection brands={result.brands} />
+            </div>
+          </div>
+
+        </div>
+      )}
+
+      {/* ── footer ── */}
+      <footer className="border-t border-border px-8 py-5 mt-4">
+        <p className="text-muted text-xs">
+          Built by Celeste Gonzalez,{" "}
+          <a href="https://celesteseo.com" className="text-purple hover:text-purple-bright transition-colors underline">
+            CelesteSEO.com
+          </a>
+          {" "}· Data by{" "}
+          <a href="https://seranking.com" className="text-purple hover:text-purple-bright transition-colors underline">
+            SE Ranking
+          </a>
+        </p>
       </footer>
     </main>
   );

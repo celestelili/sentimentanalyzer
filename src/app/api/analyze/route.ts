@@ -1,97 +1,89 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  fetchLeaderboard,
-  fetchPromptsByBrand,
-  scoreBrand,
-  type BrandScore,
-} from "@/lib/seranking";
+import { fetchLeaderboard, fetchPromptsByBrand, scoreBrand, type BrandScore } from "@/lib/seranking";
 import { MOCK_LEADERBOARD, MOCK_PROMPTS } from "@/lib/mockData";
 
-// SE Ranking keys: alphanumeric + dashes/underscores, 10–200 chars
-const API_KEY_RE = /^[A-Za-z0-9_\-]{10,200}$/;
-// Category: letters, digits, spaces, hyphens only
-const CATEGORY_RE = /^[A-Za-z0-9 \-]{1,80}$/;
-
-function sanitizeCategory(raw: unknown): string {
-  if (typeof raw !== "string") return "televisions";
-  const trimmed = raw.trim();
-  return CATEGORY_RE.test(trimmed) ? trimmed : "televisions";
-}
+const API_KEY_RE  = /^[A-Za-z0-9_\-]{10,200}$/;
+const DOMAIN_RE   = /^[A-Za-z0-9][A-Za-z0-9\-\.]{1,100}\.[A-Za-z]{2,10}$/;
 
 function validateApiKey(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
-  const trimmed = raw.trim();
-  return API_KEY_RE.test(trimmed) ? trimmed : null;
+  const t = raw.trim();
+  return API_KEY_RE.test(t) ? t : null;
 }
 
-// Strip any occurrence of the key from error messages before returning them to the client
+function validateDomain(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const t = raw.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  return DOMAIN_RE.test(t) ? t : null;
+}
+
+function brandFromDomain(domain: string): string {
+  const name = domain.replace(/\.(com|net|org|io|co|tv|biz|info|us|uk)(\.[a-z]+)?$/i, "");
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
 function redactKey(message: string, key: string): string {
-  if (!key) return message;
   return message.replaceAll(key, "[REDACTED]");
+}
+
+function computeScores(leaderboard: typeof MOCK_LEADERBOARD, promptsMap: typeof MOCK_PROMPTS) {
+  const maxAvgSOV = Math.max(...leaderboard.map((e) => {
+    const vals = Object.values(e.sov);
+    return vals.reduce((a, b) => a + b, 0) / vals.length;
+  }));
+  const scores: BrandScore[] = leaderboard.map((entry) =>
+    scoreBrand(entry, promptsMap[entry.brand] ?? { positive: [], neutral: [], negative: [] }, maxAvgSOV)
+  );
+  return scores;
 }
 
 export async function POST(req: NextRequest) {
   let apiKey: string | null = null;
-
   try {
     const body = await req.json().catch(() => ({}));
     apiKey = validateApiKey(body.apiKey);
-    const category = sanitizeCategory(body.category);
 
     if (body.apiKey && !apiKey) {
-      return NextResponse.json(
-        { error: "Invalid API key format." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Invalid API key format." }, { status: 400 });
     }
 
-    let leaderboard;
-    let promptsMap: Record<string, { positive: string[]; neutral: string[]; negative: string[] }>;
+    const targetDomain   = validateDomain(body.targetDomain);
+    const competitor1    = validateDomain(body.competitor1);
+    const competitor2    = validateDomain(body.competitor2);
+
+    const domains = [targetDomain, competitor1, competitor2].filter(Boolean) as string[];
+
+    let scores: BrandScore[];
 
     if (!apiKey) {
-      leaderboard = MOCK_LEADERBOARD;
-      promptsMap = MOCK_PROMPTS;
+      // Demo: use mock data, pick first 3 brands (Sony, Samsung, LG)
+      const demo = MOCK_LEADERBOARD.slice(0, 3);
+      scores = computeScores(demo, MOCK_PROMPTS);
     } else {
-      leaderboard = await fetchLeaderboard(apiKey, category);
-      const brands = leaderboard.map((e) => e.brand);
-      const promptResults = await Promise.all(
-        brands.map((b) => fetchPromptsByBrand(apiKey!, b))
-      );
-      promptsMap = Object.fromEntries(brands.map((b, i) => [b, promptResults[i]]));
+      if (domains.length === 0) {
+        return NextResponse.json({ error: "Provide at least a target domain." }, { status: 400 });
+      }
+      const brands = domains.map(brandFromDomain);
+      const leaderboard = await fetchLeaderboard(apiKey, brands.join(","));
+      const promptResults = await Promise.all(brands.map((b) => fetchPromptsByBrand(apiKey!, b)));
+      const promptsMap = Object.fromEntries(brands.map((b, i) => [b, promptResults[i]]));
+      scores = computeScores(leaderboard, promptsMap as typeof MOCK_PROMPTS);
     }
 
-    const maxAvgSOV = Math.max(
-      ...leaderboard.map((e) => {
-        const vals = Object.values(e.sov);
-        return vals.reduce((a, b) => a + b, 0) / vals.length;
-      })
-    );
-
-    const scores: BrandScore[] = leaderboard.map((entry) =>
-      scoreBrand(entry, promptsMap[entry.brand] ?? { positive: [], neutral: [], negative: [] }, maxAvgSOV)
-    );
-
-    scores.sort((a, b) => b.trustExposureScore - a.trustExposureScore);
-
-    return NextResponse.json({ demo: !apiKey, category, brands: scores });
+    return NextResponse.json({
+      demo: !apiKey,
+      domains: domains.length ? domains : ["sony.com", "samsung.com", "lg.com"],
+      brands: scores,
+    });
   } catch (err) {
     const raw = err instanceof Error ? err.message : "Unknown error";
-    // Never send the API key back to the client in an error message
     const message = apiKey ? redactKey(raw, apiKey) : raw;
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
 export async function GET() {
-  const maxAvgSOV = Math.max(
-    ...MOCK_LEADERBOARD.map((e) => {
-      const vals = Object.values(e.sov);
-      return vals.reduce((a, b) => a + b, 0) / vals.length;
-    })
-  );
-  const scores: BrandScore[] = MOCK_LEADERBOARD.map((entry) =>
-    scoreBrand(entry, MOCK_PROMPTS[entry.brand] ?? { positive: [], neutral: [], negative: [] }, maxAvgSOV)
-  );
-  scores.sort((a, b) => b.trustExposureScore - a.trustExposureScore);
-  return NextResponse.json({ demo: true, category: "televisions", brands: scores });
+  const demo = MOCK_LEADERBOARD.slice(0, 3);
+  const scores = computeScores(demo, MOCK_PROMPTS);
+  return NextResponse.json({ demo: true, domains: ["sony.com", "samsung.com", "lg.com"], brands: scores });
 }
