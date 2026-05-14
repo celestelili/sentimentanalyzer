@@ -2,12 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   discoverBrand,
   fetchLeaderboard,
-  fetchPromptsByBrand,
-  scoreBrand,
-  type BrandScore,
+  visibilityScore,
   type LeaderboardEntry,
+  type EngineSOV,
 } from "@/lib/seranking";
-import { MOCK_LEADERBOARD, MOCK_PROMPTS } from "@/lib/mockData";
+import { MOCK_LEADERBOARD } from "@/lib/mockData";
 import { SUPPORTED_COUNTRIES } from "@/lib/countries";
 
 const API_KEY_RE = /^[A-Za-z0-9_\-]{10,200}$/;
@@ -38,17 +37,20 @@ function redactKey(message: string, key: string): string {
   return message.replaceAll(key, "[REDACTED]");
 }
 
-type PromptsMap = Record<string, { positive: string[]; neutral: string[]; negative: string[] }>;
+function avgSOV(sov: EngineSOV): number {
+  const vals = Object.values(sov);
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
 
-function computeScores(leaderboard: LeaderboardEntry[], promptsMap: PromptsMap): BrandScore[] {
-  const avgs = leaderboard.map((e) => {
-    const vals = Object.values(e.sov);
-    return vals.reduce((a, b) => a + b, 0) / vals.length;
-  });
+function leaderboardToOverview(leaderboard: LeaderboardEntry[]) {
+  const avgs      = leaderboard.map((e) => avgSOV(e.sov));
   const maxAvgSOV = avgs.length > 0 ? Math.max(...avgs) : 0;
-  return leaderboard.map((entry) =>
-    scoreBrand(entry, promptsMap[entry.brand] ?? { positive: [], neutral: [], negative: [] }, maxAvgSOV)
-  );
+  return leaderboard.map((entry, i) => ({
+    brand:      entry.brand,
+    sov:        entry.sov,
+    avgSOV:     Math.round(avgs[i] * 10) / 10,
+    visibility: visibilityScore(entry.sov, maxAvgSOV),
+  }));
 }
 
 export async function POST(req: NextRequest) {
@@ -61,15 +63,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid API key format." }, { status: 400 });
     }
 
-    // ── demo mode (no API key) ─────────────────────────────────────────────
+    // ── demo mode ──────────────────────────────────────────────────────────
     if (!apiKey) {
       const country = validateCountry(body.country) ?? "US";
-      const scores  = computeScores(MOCK_LEADERBOARD.slice(0, 3), MOCK_PROMPTS);
+      const brands  = leaderboardToOverview(MOCK_LEADERBOARD.slice(0, 3));
       return NextResponse.json({
         demo: true,
         country,
         domains: ["sony.com", "samsung.com", "lg.com"],
-        brands: scores,
+        brands,
       });
     }
 
@@ -90,7 +92,6 @@ export async function POST(req: NextRequest) {
 
     const source = country.toLowerCase();
 
-    // 1. Discover brand names for all domains in parallel
     const brandNames = await Promise.all(
       domains.map((d) => discoverBrand(apiKey!, d, source))
     );
@@ -98,17 +99,10 @@ export async function POST(req: NextRequest) {
     const primary     = { target: domains[0], brand: brandNames[0] };
     const competitors = domains.slice(1).map((d, i) => ({ target: d, brand: brandNames[i + 1] }));
 
-    // 2. Fetch leaderboard and prompts in parallel where possible
     const leaderboard = await fetchLeaderboard(apiKey, primary, competitors, source);
+    const brands      = leaderboardToOverview(leaderboard);
 
-    const promptResults = await Promise.all(
-      brandNames.map((b) => fetchPromptsByBrand(apiKey!, b, source))
-    );
-    const promptsMap = Object.fromEntries(brandNames.map((b, i) => [b, promptResults[i]]));
-
-    const scores = computeScores(leaderboard, promptsMap);
-
-    return NextResponse.json({ demo: false, country, domains, brands: scores });
+    return NextResponse.json({ demo: false, country, domains, brands });
   } catch (err) {
     const raw     = err instanceof Error ? err.message : "Unknown error";
     const message = apiKey ? redactKey(raw, apiKey) : raw;
@@ -117,12 +111,11 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET() {
-  const demo   = MOCK_LEADERBOARD.slice(0, 3);
-  const scores = computeScores(demo, MOCK_PROMPTS);
+  const brands = leaderboardToOverview(MOCK_LEADERBOARD.slice(0, 3));
   return NextResponse.json({
     demo: true,
     country: "US",
     domains: ["sony.com", "samsung.com", "lg.com"],
-    brands: scores,
+    brands,
   });
 }

@@ -80,21 +80,31 @@ function clamp(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)));
 }
 
+// Compute the three prompt-dependent trust signals
+export function scorePrompts(
+  prompts: { positive: string[]; neutral: string[]; negative: string[] }
+): { negativeQueryShare: number; reviewRisk: number; persuasionStrength: number } {
+  const all   = [...prompts.positive, ...prompts.neutral, ...prompts.negative];
+  const total = all.length;
+  return {
+    negativeQueryShare: clamp(100 - (prompts.negative.length / Math.max(total, 1)) * 100),
+    reviewRisk:         clamp(100 - all.filter((q) => REVIEW_RISK_PATTERNS.some((p) => p.test(q))).length / Math.max(total, 1) * 100),
+    persuasionStrength: clamp(all.filter((q) => PERSUASION_PATTERNS.some((p) => p.test(q))).length / Math.max(total, 1) * 100),
+  };
+}
+
+export function visibilityScore(sov: EngineSOV, maxAvgSOV: number): number {
+  return clamp((avgSOV(sov) / Math.max(maxAvgSOV, 1)) * 100);
+}
+
 export function scoreBrand(
   entry: LeaderboardEntry,
   prompts: { positive: string[]; neutral: string[]; negative: string[] },
   maxAvgSOV: number
 ): BrandScore {
-  const avg = avgSOV(entry.sov);
-  const allQueries = [...prompts.positive, ...prompts.neutral, ...prompts.negative];
-  const total = allQueries.length;
-
-  const visibility         = clamp((avg / Math.max(maxAvgSOV, 1)) * 100);
-  const negativeQueryShare = clamp(100 - (prompts.negative.length / Math.max(total, 1)) * 100);
-  const reviewRiskCount    = allQueries.filter((q) => REVIEW_RISK_PATTERNS.some((p) => p.test(q))).length;
-  const reviewRisk         = clamp(100 - (reviewRiskCount / Math.max(total, 1)) * 100);
-  const persuasionCount    = allQueries.filter((q) => PERSUASION_PATTERNS.some((p) => p.test(q))).length;
-  const persuasionStrength = clamp((persuasionCount / Math.max(total, 1)) * 100);
+  const avg        = avgSOV(entry.sov);
+  const visibility = clamp((avg / Math.max(maxAvgSOV, 1)) * 100);
+  const { negativeQueryShare, reviewRisk, persuasionStrength } = scorePrompts(prompts);
   const trustExposureScore = clamp((visibility + negativeQueryShare + reviewRisk + persuasionStrength) / 4);
 
   return {
@@ -142,9 +152,13 @@ async function handleError(res: Response): Promise<never> {
   let detail = body;
   try {
     const json = JSON.parse(body);
-    detail = json.message ?? json.error ?? JSON.stringify(json);
+    detail = json.message ?? json.error ?? json.error_description ?? JSON.stringify(json);
   } catch {
     detail = body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
+  }
+  // SE Ranking sometimes returns 500 for rate-limit bursts
+  if (detail.toLowerCase().includes("too many")) {
+    throw new Error("Too many requests — SE Ranking rate limit hit. Wait a moment and try again.");
   }
   throw new Error(`SE Ranking error ${res.status}${detail ? `: ${detail}` : "."}`);
 }
