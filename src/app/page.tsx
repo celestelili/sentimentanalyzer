@@ -3,11 +3,13 @@
 import { useState, useCallback } from "react";
 import KawaiBucket from "@/components/KawaiBucket";
 import type { BrandScore, EngineSOV } from "@/lib/seranking";
+import { SUPPORTED_COUNTRIES } from "@/lib/countries";
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
 interface AnalysisResult {
   demo: boolean;
+  country: string;
   domains: string[];
   brands: BrandScore[];
 }
@@ -256,6 +258,7 @@ function SentimentSection({ brands }: { brands: BrandScore[] }) {
 
 export default function HomePage() {
   const [apiKey, setApiKey]         = useState("");
+  const [country, setCountry]       = useState("US");
   const [targetDomain, setTarget]   = useState("");
   const [competitor1, setComp1]     = useState("");
   const [competitor2, setComp2]     = useState("");
@@ -278,6 +281,7 @@ export default function HomePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           apiKey: trimmedKey || undefined,
+          country,
           targetDomain: targetDomain.trim() || undefined,
           competitor1: competitor1.trim() || undefined,
           competitor2: competitor2.trim() || undefined,
@@ -297,7 +301,7 @@ export default function HomePage() {
   }, [apiKey, targetDomain, competitor1, competitor2]);
 
   const clear = useCallback(() => {
-    setApiKey(""); setTarget(""); setComp1(""); setComp2("");
+    setApiKey(""); setCountry("US"); setTarget(""); setComp1(""); setComp2("");
     setResult(null); setError(null);
     setStatus("Enter your details above to begin.");
   }, []);
@@ -320,6 +324,30 @@ export default function HomePage() {
         <div className="bg-surface border border-border rounded-lg p-6 max-w-4xl">
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 mb-5">
+
+            {/* country — first so users don't waste credits on unsupported regions */}
+            <div className="sm:col-span-2">
+              <Label>Country</Label>
+              <div className="flex items-start gap-3">
+                <select
+                  value={country}
+                  onChange={(e) => setCountry(e.target.value)}
+                  className="bg-input border border-border rounded px-4 py-2.5 text-sm text-text focus:outline-none focus:border-border-bright transition-colors appearance-none cursor-pointer"
+                  style={{ minWidth: "200px" }}
+                >
+                  {SUPPORTED_COUNTRIES.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.label} ({c.code})
+                    </option>
+                  ))}
+                </select>
+                <p className="text-muted text-xs leading-relaxed pt-2.5 max-w-sm">
+                  AI Overview and AI Mode data is only available in select countries.
+                  Choosing the wrong country wastes API credits — pick where your audience is.
+                </p>
+              </div>
+            </div>
+
             {/* API key */}
             <div className="sm:col-span-2">
               <Label>SE Ranking API Key</Label>
@@ -413,12 +441,26 @@ export default function HomePage() {
       {result && (
         <div className="px-8 pb-16 space-y-8 fade-up">
 
-          {result.demo && (
-            <div className="bg-[#1E1B2E] border border-purple-dim/40 rounded px-5 py-2.5 inline-flex items-center gap-2">
-              <span className="text-purple text-xs uppercase tracking-widest">Demo mode</span>
-              <span className="text-muted text-xs">— showing sample TV brand data</span>
-            </div>
-          )}
+          <div className="bg-[#1E1B2E] border border-purple-dim/40 rounded px-5 py-2.5 inline-flex items-center gap-3">
+            {result.demo && (
+              <>
+                <span className="text-purple text-xs uppercase tracking-widest">Demo mode</span>
+                <span className="text-border-bright text-xs">·</span>
+              </>
+            )}
+            <span className="text-muted text-xs">
+              Country:{" "}
+              <span className="text-text">
+                {SUPPORTED_COUNTRIES.find((c) => c.code === result.country)?.label ?? result.country}
+              </span>
+            </span>
+            {result.demo && (
+              <>
+                <span className="text-border-bright text-xs">·</span>
+                <span className="text-muted text-xs">showing sample TV brand data</span>
+              </>
+            )}
+          </div>
 
           {/* SOV table */}
           <div>

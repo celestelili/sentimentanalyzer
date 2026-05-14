@@ -150,12 +150,13 @@ async function seRequest<T>(
 
 export async function fetchLeaderboard(
   apiKey: string,
-  category: string
+  category: string,
+  country: string
 ): Promise<LeaderboardEntry[]> {
   const data = await seRequest<{ items: Array<{ brand: string; shares: Record<string, number> }> }>(
     "/ai-search/leaderboard",
     apiKey,
-    { category }
+    { category, country }
   );
   return data.items.map((item) => ({
     brand: item.brand,
@@ -171,12 +172,13 @@ export async function fetchLeaderboard(
 
 export async function fetchPromptsByBrand(
   apiKey: string,
-  brand: string
+  brand: string,
+  country: string
 ): Promise<{ positive: string[]; neutral: string[]; negative: string[] }> {
   const data = await seRequest<{ prompts: string[] }>(
     "/ai-search/prompts/brand",
     apiKey,
-    { brand }
+    { brand, country }
   );
   const classified: { positive: string[]; neutral: string[]; negative: string[] } = {
     positive: [],

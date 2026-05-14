@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchLeaderboard, fetchPromptsByBrand, scoreBrand, type BrandScore } from "@/lib/seranking";
 import { MOCK_LEADERBOARD, MOCK_PROMPTS } from "@/lib/mockData";
+import { SUPPORTED_COUNTRIES } from "@/lib/countries";
 
-const API_KEY_RE  = /^[A-Za-z0-9_\-]{10,200}$/;
-const DOMAIN_RE   = /^[A-Za-z0-9][A-Za-z0-9\-\.]{1,100}\.[A-Za-z]{2,10}$/;
+const API_KEY_RE = /^[A-Za-z0-9_\-]{10,200}$/;
+const DOMAIN_RE  = /^[A-Za-z0-9][A-Za-z0-9\-\.]{1,100}\.[A-Za-z]{2,10}$/;
 
 function validateApiKey(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
@@ -15,6 +16,12 @@ function validateDomain(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const t = raw.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
   return DOMAIN_RE.test(t) ? t : null;
+}
+
+function validateCountry(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const t = raw.trim().toUpperCase();
+  return SUPPORTED_COUNTRIES.some((c) => c.code === t) ? t : null;
 }
 
 function brandFromDomain(domain: string): string {
@@ -31,10 +38,9 @@ function computeScores(leaderboard: typeof MOCK_LEADERBOARD, promptsMap: typeof 
     const vals = Object.values(e.sov);
     return vals.reduce((a, b) => a + b, 0) / vals.length;
   }));
-  const scores: BrandScore[] = leaderboard.map((entry) =>
+  return leaderboard.map((entry) =>
     scoreBrand(entry, promptsMap[entry.brand] ?? { positive: [], neutral: [], negative: [] }, maxAvgSOV)
-  );
-  return scores;
+  ) as BrandScore[];
 }
 
 export async function POST(req: NextRequest) {
@@ -47,16 +53,22 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid API key format." }, { status: 400 });
     }
 
-    const targetDomain   = validateDomain(body.targetDomain);
-    const competitor1    = validateDomain(body.competitor1);
-    const competitor2    = validateDomain(body.competitor2);
+    const country = validateCountry(body.country);
+    if (!country) {
+      return NextResponse.json(
+        { error: "Select a supported country. AI Overview and AI Mode data is country-specific." },
+        { status: 400 }
+      );
+    }
 
-    const domains = [targetDomain, competitor1, competitor2].filter(Boolean) as string[];
+    const targetDomain = validateDomain(body.targetDomain);
+    const competitor1  = validateDomain(body.competitor1);
+    const competitor2  = validateDomain(body.competitor2);
+    const domains      = [targetDomain, competitor1, competitor2].filter(Boolean) as string[];
 
     let scores: BrandScore[];
 
     if (!apiKey) {
-      // Demo: use mock data, pick first 3 brands (Sony, Samsung, LG)
       const demo = MOCK_LEADERBOARD.slice(0, 3);
       scores = computeScores(demo, MOCK_PROMPTS);
     } else {
@@ -64,14 +76,17 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Provide at least a target domain." }, { status: 400 });
       }
       const brands = domains.map(brandFromDomain);
-      const leaderboard = await fetchLeaderboard(apiKey, brands.join(","));
-      const promptResults = await Promise.all(brands.map((b) => fetchPromptsByBrand(apiKey!, b)));
+      const leaderboard = await fetchLeaderboard(apiKey, brands.join(","), country);
+      const promptResults = await Promise.all(
+        brands.map((b) => fetchPromptsByBrand(apiKey!, b, country))
+      );
       const promptsMap = Object.fromEntries(brands.map((b, i) => [b, promptResults[i]]));
       scores = computeScores(leaderboard, promptsMap as typeof MOCK_PROMPTS);
     }
 
     return NextResponse.json({
       demo: !apiKey,
+      country,
       domains: domains.length ? domains : ["sony.com", "samsung.com", "lg.com"],
       brands: scores,
     });
@@ -85,5 +100,10 @@ export async function POST(req: NextRequest) {
 export async function GET() {
   const demo = MOCK_LEADERBOARD.slice(0, 3);
   const scores = computeScores(demo, MOCK_PROMPTS);
-  return NextResponse.json({ demo: true, domains: ["sony.com", "samsung.com", "lg.com"], brands: scores });
+  return NextResponse.json({
+    demo: true,
+    country: "US",
+    domains: ["sony.com", "samsung.com", "lg.com"],
+    brands: scores,
+  });
 }
