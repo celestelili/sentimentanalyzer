@@ -315,10 +315,13 @@ export default function HomePage() {
     setResult(null);
     setHasRun(true);
     try {
+      const trimmedKey = apiKey.trim();
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: apiKey.trim() || undefined, category }),
+        // Key is only sent over the encrypted HTTPS request body — never stored
+        // in localStorage, sessionStorage, or any client-side persistence.
+        body: JSON.stringify({ apiKey: trimmedKey || undefined, category }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Request failed");
@@ -369,6 +372,8 @@ export default function HomePage() {
               placeholder="SE Ranking API key (leave blank for demo mode)"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
               className="flex-1 font-mono text-sm border border-border rounded-md px-4 py-2.5 bg-white placeholder-muted/60 focus:outline-none focus:ring-2 focus:ring-ink/20"
             />
             <input
@@ -376,6 +381,7 @@ export default function HomePage() {
               placeholder="Category (e.g. televisions)"
               value={category}
               onChange={(e) => setCategory(e.target.value)}
+              maxLength={80}
               className="w-48 font-mono text-sm border border-border rounded-md px-4 py-2.5 bg-white placeholder-muted/60 focus:outline-none focus:ring-2 focus:ring-ink/20"
             />
             <button
@@ -386,11 +392,19 @@ export default function HomePage() {
               {loading ? "Analyzing…" : "Run Analysis"}
             </button>
           </div>
-          {!hasRun && (
-            <p className="font-mono text-xs text-muted mt-2">
-              Running without an API key loads sample TV brand data for demo.
+          {/* Privacy notice — always visible */}
+          <div className="flex items-start gap-2 mt-3">
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none" className="shrink-0 mt-0.5">
+              <path d="M6.5 1.5 C4 1.5 2 3.5 2 6 L2 8 C2 8.6 2.4 9 3 9 L10 9 C10.6 9 11 8.6 11 8 L11 6 C11 3.5 9 1.5 6.5 1.5Z" stroke="#6B6B6B" strokeWidth="1.2" fill="none"/>
+              <rect x="4.5" y="9" width="4" height="3" rx="0.5" stroke="#6B6B6B" strokeWidth="1.2" fill="none"/>
+              <circle cx="6.5" cy="10.5" r="0.6" fill="#6B6B6B"/>
+            </svg>
+            <p className="font-mono text-xs text-muted leading-relaxed">
+              Your API key is sent only over an encrypted HTTPS request, used server-side to call SE Ranking, and then discarded.
+              It is never logged, stored, or retained in any database, session, or file.
+              {!hasRun && " Leave it blank to run in demo mode."}
             </p>
-          )}
+          </div>
         </div>
       </section>
 
