@@ -77,10 +77,12 @@ function SignalCell({ value }: { value: number }) {
 // ─── SOV table ────────────────────────────────────────────────────────────────
 
 function SOVTable({ brands }: { brands: BrandScore[] }) {
-  // find max per engine for highlight
+  // find max per engine for highlight — guard against empty brands
   const maxByEngine: Partial<Record<keyof EngineSOV, number>> = {};
-  for (const eng of ENGINES) {
-    maxByEngine[eng] = Math.max(...brands.map((b) => b.sov[eng]));
+  if (brands.length > 0) {
+    for (const eng of ENGINES) {
+      maxByEngine[eng] = Math.max(...brands.map((b) => b.sov[eng]));
+    }
   }
 
   return (
@@ -298,7 +300,7 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
-  }, [apiKey, targetDomain, competitor1, competitor2]);
+  }, [apiKey, country, targetDomain, competitor1, competitor2]);
 
   const clear = useCallback(() => {
     setApiKey(""); setCountry("US"); setTarget(""); setComp1(""); setComp2("");

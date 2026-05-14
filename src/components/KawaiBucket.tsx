@@ -4,7 +4,6 @@ type BucketType = "positive" | "neutral" | "negative";
 
 interface KawaiBucketProps {
   type: BucketType;
-  label?: string;
   count?: number;
   pct?: number;
   className?: string;
