@@ -10,10 +10,6 @@ function validateApiKey(raw: unknown): string | null {
   return API_KEY_RE.test(t) ? t : null;
 }
 
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
 function redactKey(message: string, key: string): string {
   return message.replaceAll(key, "[REDACTED]");
 }
@@ -45,9 +41,7 @@ export async function POST(req: NextRequest) {
     const source = (typeof body.country === "string" ? body.country : "us").toLowerCase();
     const result = [];
 
-    for (let i = 0; i < brands.length; i++) {
-      if (i > 0) await sleep(500);
-      const brand = brands[i];
+    for (const brand of brands) {
       const prompts = await fetchPromptsByBrand(apiKey, brand, source);
       result.push({ brand, ...scorePrompts(prompts), prompts });
     }
