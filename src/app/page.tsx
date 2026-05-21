@@ -114,10 +114,16 @@ function StepLog({ steps }: { steps: Step[] }) {
 // ─── SOV table ────────────────────────────────────────────────────────────────
 
 function SOVTable({ brands }: { brands: OverviewBrand[] }) {
+  // For each engine, find the max SOV across all brands and whether any brand
+  // has non-zero data. An engine where every brand shows 0 means SE Ranking
+  // returned no citations for that engine — show "—" rather than "0%".
   const maxByEngine: Partial<Record<keyof EngineSOV, number>> = {};
+  const engineHasData: Partial<Record<keyof EngineSOV, boolean>> = {};
   if (brands.length > 0) {
     for (const eng of ENGINES) {
-      maxByEngine[eng] = Math.max(...brands.map((b) => b.sov[eng]));
+      const max = Math.max(...brands.map((b) => b.sov[eng]));
+      maxByEngine[eng] = max;
+      engineHasData[eng] = max > 0;
     }
   }
   return (
@@ -136,15 +142,19 @@ function SOVTable({ brands }: { brands: OverviewBrand[] }) {
             <tr key={b.brand} className={`border-t border-border ${i === 0 ? "border-border-bright" : ""}`}>
               <td className="py-3 pr-4 font-semibold text-purple-bright text-sm">{b.brand}</td>
               {ENGINES.map((eng) => {
-                const isMax = b.sov[eng] === maxByEngine[eng];
+                const hasData = engineHasData[eng];
+                const val = b.sov[eng];
+                const isMax = hasData && val > 0 && val === maxByEngine[eng];
                 return (
                   <td key={eng} className="py-3 px-3 text-center tabular-nums">
-                    {isMax ? (
+                    {!hasData ? (
+                      <span className="text-muted/40">—</span>
+                    ) : isMax ? (
                       <span className="inline-block bg-surface border border-border-bright rounded px-2 py-0.5 text-text font-semibold">
-                        {b.sov[eng]}%
+                        {val}%
                       </span>
                     ) : (
-                      <span className="text-muted">{b.sov[eng]}%</span>
+                      <span className="text-muted">{val}%</span>
                     )}
                   </td>
                 );

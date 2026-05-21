@@ -254,31 +254,46 @@ export async function fetchLeaderboard(
     leaderboard: Array<{ domain: string; share_of_voice: number; rank: number }>;
   };
 
+  // Diagnostic: log raw API response structure to server output so mismatches are visible.
+  console.log("[leaderboard] result domains:", Object.keys(data.results ?? {}));
+  console.log("[leaderboard] leaderboard entries:", JSON.stringify(data.leaderboard));
+  for (const [domain, engines] of Object.entries(data.results ?? {})) {
+    console.log(`[leaderboard] ${domain} engines:`, Object.keys(engines ?? {}));
+    for (const [eng, vals] of Object.entries(engines ?? {})) {
+      console.log(`[leaderboard]   ${eng} brand_presence=${vals?.brand_presence}`);
+    }
+  }
+
   // Build domain → brand map from what we passed in
   const domainToBrand: Record<string, string> = {
     [primary.target]: primary.brand,
     ...Object.fromEntries(competitors.map((c) => [c.target, c.brand])),
   };
 
-  // For each engine, compute total brand_presence across all domains
+  // For each engine, compute total brand_presence across all domains in results.
+  // This is the denominator for relative SOV among the queried brands.
   const engineTotals: Partial<Record<Engine, number>> = {};
   for (const engine of ENGINES) {
-    engineTotals[engine] = Object.values(data.results).reduce(
+    engineTotals[engine] = Object.values(data.results ?? {}).reduce(
       (sum, domainData) => sum + (domainData[engine]?.brand_presence ?? 0),
       0
     );
   }
+  console.log("[leaderboard] engineTotals:", JSON.stringify(engineTotals));
 
   // Sort by leaderboard rank
-  const ranked = [...data.leaderboard].sort((a, b) => a.rank - b.rank);
+  const ranked = [...(data.leaderboard ?? [])].sort((a, b) => a.rank - b.rank);
 
   return ranked.map(({ domain }) => {
-    const domainData = data.results[domain] ?? {};
+    const domainData = (data.results ?? {})[domain] ?? {};
     const sov: EngineSOV = { chatgpt: 0, perplexity: 0, gemini: 0, ai_overview: 0, ai_mode: 0 };
 
     for (const engine of ENGINES) {
       const presence = domainData[engine]?.brand_presence ?? 0;
       const total    = engineTotals[engine] ?? 0;
+      // SOV is relative share among queried brands. When total is 0, no brand in
+      // the comparison set has any citations for this engine — leave as 0 so the
+      // UI can distinguish "no data" from a genuine zero.
       sov[ENGINE_KEY_MAP[engine]] = total > 0 ? Math.round((presence / total) * 100) : 0;
     }
 
