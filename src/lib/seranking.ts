@@ -254,24 +254,16 @@ export async function fetchLeaderboard(
     leaderboard: Array<{ domain: string; share_of_voice: number; rank: number }>;
   };
 
-  // Diagnostic: log raw API response structure to server output so mismatches are visible.
-  console.log("[leaderboard] result domains:", Object.keys(data.results ?? {}));
-  console.log("[leaderboard] leaderboard entries:", JSON.stringify(data.leaderboard));
-  for (const [domain, engines] of Object.entries(data.results ?? {})) {
-    console.log(`[leaderboard] ${domain} engines:`, Object.keys(engines ?? {}));
-    for (const [eng, vals] of Object.entries(engines ?? {})) {
-      console.log(`[leaderboard]   ${eng} brand_presence=${vals?.brand_presence}`);
-    }
-  }
-
   // Build domain → brand map from what we passed in
   const domainToBrand: Record<string, string> = {
     [primary.target]: primary.brand,
     ...Object.fromEntries(competitors.map((c) => [c.target, c.brand])),
   };
 
-  // For each engine, compute total brand_presence across all domains in results.
-  // This is the denominator for relative SOV among the queried brands.
+  // For each engine, sum brand_presence across all queried domains.
+  // This is the denominator for per-engine relative SOV among the queried brands.
+  // When total = 0 for an engine, no queried brand has any citations there —
+  // sov stays 0 and the UI shows "—" rather than "0%".
   const engineTotals: Partial<Record<Engine, number>> = {};
   for (const engine of ENGINES) {
     engineTotals[engine] = Object.values(data.results ?? {}).reduce(
@@ -279,7 +271,6 @@ export async function fetchLeaderboard(
       0
     );
   }
-  console.log("[leaderboard] engineTotals:", JSON.stringify(engineTotals));
 
   // Sort by leaderboard rank
   const ranked = [...(data.leaderboard ?? [])].sort((a, b) => a.rank - b.rank);
