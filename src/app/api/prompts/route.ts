@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchPromptsByBrand, scorePrompts } from "@/lib/seranking";
+import { fetchPromptsByBrand, scorePrompts, type PromptEntry } from "@/lib/seranking";
 import { MOCK_PROMPTS } from "@/lib/mockData";
 
 const API_KEY_RE = /^[A-Za-z0-9_\-]{10,200}$/;
@@ -31,7 +31,8 @@ export async function POST(req: NextRequest) {
     // ── demo mode ──────────────────────────────────────────────────────────
     if (!apiKey) {
       const result = brands.map((brand) => {
-        const prompts = MOCK_PROMPTS[brand] ?? { positive: [], neutral: [], negative: [] };
+        const empty = { positive: [] as PromptEntry[], neutral: [] as PromptEntry[], negative: [] as PromptEntry[] };
+        const prompts = MOCK_PROMPTS[brand] ?? empty;
         return { brand, ...scorePrompts(prompts), prompts };
       });
       return NextResponse.json({ demo: true, brands: result });

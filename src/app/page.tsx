@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef } from "react";
 import KawaiBucket from "@/components/KawaiBucket";
-import type { EngineSOV } from "@/lib/seranking";
+import type { EngineSOV, PromptEntry } from "@/lib/seranking";
 import { SUPPORTED_COUNTRIES } from "@/lib/countries";
 
 // ─── types ────────────────────────────────────────────────────────────────────
@@ -19,7 +19,7 @@ interface PromptsBrand {
   negativeQueryShare: number;
   reviewRisk: number;
   persuasionStrength: number;
-  prompts: { positive: string[]; neutral: string[]; negative: string[] };
+  prompts: { positive: PromptEntry[]; neutral: PromptEntry[]; negative: PromptEntry[] };
 }
 
 interface OverviewResult {
@@ -295,9 +295,14 @@ function QueryIntelligenceSection({ brands }: { brands: PromptsBrand[] }) {
                           style={{ color: colorMap[bucket] }}>
                           {bucket} ({b.prompts[bucket].length})
                         </p>
-                        <ul className="space-y-1">
-                          {b.prompts[bucket].map((q, i) => (
-                            <li key={i} className="text-xs text-muted leading-relaxed">&ldquo;{q}&rdquo;</li>
+                        <ul className="space-y-2">
+                          {b.prompts[bucket].map((entry, i) => (
+                            <li key={i} className="text-xs leading-relaxed">
+                              <span className="text-text font-medium block">&ldquo;{entry.prompt}&rdquo;</span>
+                              {entry.answer && (
+                                <span className="text-muted block mt-0.5">{entry.answer}</span>
+                              )}
+                            </li>
                           ))}
                           {b.prompts[bucket].length === 0 && (
                             <li className="text-xs text-muted italic">none</li>
@@ -643,7 +648,7 @@ export default function HomePage() {
               {promptsBrands.length > 0 && (
                 <>
                   <div>
-                    <SectionTitle>Sentiment Bucket Breakdown (share of queries by intent type per brand)</SectionTitle>
+                    <SectionTitle>Sentiment Bucket Breakdown (classified by AI response tone per brand)</SectionTitle>
                     <div className="bg-surface border border-border rounded-lg p-5 mt-3">
                       <QueryIntelligenceSection brands={promptsBrands} />
                     </div>

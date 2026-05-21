@@ -11,11 +11,16 @@ export interface LeaderboardEntry {
   sov: EngineSOV;
 }
 
+export interface PromptEntry {
+  prompt: string;
+  answer: string;
+}
+
 export interface BrandPrompts {
   [brand: string]: {
-    positive: string[];
-    neutral: string[];
-    negative: string[];
+    positive: PromptEntry[];
+    neutral: PromptEntry[];
+    negative: PromptEntry[];
   };
 }
 
@@ -29,9 +34,9 @@ export interface BrandScore {
   persuasionStrength: number;
   trustExposureScore: number;
   prompts: {
-    positive: string[];
-    neutral: string[];
-    negative: string[];
+    positive: PromptEntry[];
+    neutral: PromptEntry[];
+    negative: PromptEntry[];
   };
 }
 
@@ -69,6 +74,39 @@ export function classifyQuery(query: string): "positive" | "neutral" | "negative
   return "neutral";
 }
 
+// ─── response-based classification ───────────────────────────────────────────
+
+const RESPONSE_POSITIVE_PATTERNS = [
+  /\b(is|are)\s+(highly|widely|generally|strongly)\s+(recommended|regarded|recognized|respected)\b/i,
+  /\b(is|are)\s+(recognized|acclaimed|celebrated|renowned)\s+(as|for)\b/i,
+  /\b(market leader|industry leader|industry standard|sets the standard)\b/i,
+  /\bis known for (its|their)?\s*(quality|innovation|performance|excellence|reliability|durability)\b/i,
+  /\baward[- ]winning\b/i,
+  /\btrusted\s+(brand|name|choice|source)\b/i,
+  /\bis\s+(widely|generally)?\s*considered\s+(one of\s+)?(a|the\s+)?best\b/i,
+  /\bis\s+(a|the)\s+(top|leading|premier)\s+(choice|brand|option|pick)\b/i,
+];
+
+const RESPONSE_NEGATIVE_PATTERNS = [
+  /\bhas\s+(faced|received|come under|attracted)\s+(criticism|backlash|scrutiny|fire|complaints)\b/i,
+  /\bhas been criticized\b/i,
+  /\b(controversy|controversial|scandal)\b/i,
+  /\b(lawsuit|lawsuits|legal action|legal dispute|settlement|litigation)\b/i,
+  /\b(product\s+)?recall\b/i,
+  /\baccused of\b/i,
+  /\ballegations?\b/i,
+  /\bwidespread\s+(complaint|complaints|criticism|issues|problems|negative)\b/i,
+  /\b(negative reviews|negative feedback|negative press|negative publicity)\b/i,
+  /\bcustomers?\s+(complaint|complaints|report issues|have complained)\b/i,
+];
+
+export function classifyResponse(text: string): "positive" | "neutral" | "negative" {
+  if (!text) return "neutral";
+  if (RESPONSE_NEGATIVE_PATTERNS.some((p) => p.test(text))) return "negative";
+  if (RESPONSE_POSITIVE_PATTERNS.some((p) => p.test(text))) return "positive";
+  return "neutral";
+}
+
 // ─── scoring ──────────────────────────────────────────────────────────────────
 
 function avgSOV(sov: EngineSOV): number {
@@ -80,16 +118,19 @@ function clamp(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)));
 }
 
-// Compute the three prompt-dependent trust signals
+// Compute the three prompt-dependent trust signals.
+// negativeQueryShare uses response-based bucket counts.
+// reviewRisk and persuasionStrength still run against prompt text (intent signals).
 export function scorePrompts(
-  prompts: { positive: string[]; neutral: string[]; negative: string[] }
+  prompts: { positive: PromptEntry[]; neutral: PromptEntry[]; negative: PromptEntry[] }
 ): { negativeQueryShare: number; reviewRisk: number; persuasionStrength: number } {
-  const all   = [...prompts.positive, ...prompts.neutral, ...prompts.negative];
-  const total = all.length;
+  const all     = [...prompts.positive, ...prompts.neutral, ...prompts.negative];
+  const total   = all.length;
+  const queries = all.map((e) => e.prompt);
   return {
     negativeQueryShare: clamp(100 - (prompts.negative.length / Math.max(total, 1)) * 100),
-    reviewRisk:         clamp(100 - all.filter((q) => REVIEW_RISK_PATTERNS.some((p) => p.test(q))).length / Math.max(total, 1) * 100),
-    persuasionStrength: clamp(all.filter((q) => PERSUASION_PATTERNS.some((p) => p.test(q))).length / Math.max(total, 1) * 100),
+    reviewRisk:         clamp(100 - queries.filter((q) => REVIEW_RISK_PATTERNS.some((p) => p.test(q))).length / Math.max(total, 1) * 100),
+    persuasionStrength: clamp(queries.filter((q) => PERSUASION_PATTERNS.some((p) => p.test(q))).length / Math.max(total, 1) * 100),
   };
 }
 
@@ -99,7 +140,7 @@ export function visibilityScore(sov: EngineSOV, maxAvgSOV: number): number {
 
 export function scoreBrand(
   entry: LeaderboardEntry,
-  prompts: { positive: string[]; neutral: string[]; negative: string[] },
+  prompts: { positive: PromptEntry[]; neutral: PromptEntry[]; negative: PromptEntry[] },
   maxAvgSOV: number
 ): BrandScore {
   const avg        = avgSOV(entry.sov);
@@ -301,7 +342,7 @@ async function fetchOneEngine(
   brand: string,
   source: string,
   engine: Engine
-): Promise<Array<{ prompt: string; volume: number; type: string }>> {
+): Promise<Array<{ prompt: string; volume: number; type: string; answer: string }>> {
   const url = new URL(`${BASE_URL}/ai-search/prompts-by-brand`);
   url.searchParams.set("brand", brand);
   url.searchParams.set("source", source.toLowerCase());
@@ -314,9 +355,19 @@ async function fetchOneEngine(
   if (!res.ok) return [];
 
   const data = await res.json() as {
-    prompts?: Array<{ prompt: string; volume: number; type: string }>;
+    prompts?: Array<{
+      prompt: string;
+      volume: number;
+      type: string;
+      answer?: { text?: string; links?: string[] };
+    }>;
   };
-  return data.prompts ?? [];
+  return (data.prompts ?? []).map((p) => ({
+    prompt: p.prompt,
+    volume: p.volume,
+    type:   p.type,
+    answer: p.answer?.text ?? "",
+  }));
 }
 
 // Fetches prompts for all engines sequentially (one request at a time) to
@@ -327,8 +378,12 @@ export async function fetchPromptsByBrand(
   brand: string,
   source: string,
   delayMs = 600
-): Promise<{ positive: string[]; neutral: string[]; negative: string[] }> {
-  const classified = { positive: [] as string[], neutral: [] as string[], negative: [] as string[] };
+): Promise<{ positive: PromptEntry[]; neutral: PromptEntry[]; negative: PromptEntry[] }> {
+  const classified = {
+    positive: [] as PromptEntry[],
+    neutral:  [] as PromptEntry[],
+    negative: [] as PromptEntry[],
+  };
   const seen = new Set<string>();
 
   for (let i = 0; i < ENGINES.length; i++) {
@@ -338,7 +393,8 @@ export async function fetchPromptsByBrand(
       const q = item.prompt?.trim();
       if (!q || seen.has(q)) continue;
       seen.add(q);
-      classified[classifyQuery(q)].push(q);
+      const sentiment = classifyResponse(item.answer);
+      classified[sentiment].push({ prompt: q, answer: item.answer.slice(0, 200) });
     }
   }
 
