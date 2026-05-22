@@ -100,8 +100,12 @@ const RESPONSE_NEGATIVE_PATTERNS = [
   /\bcustomers?\s+(complaint|complaints|report issues|have complained)\b/i,
 ];
 
-export function classifyResponse(text: string): "positive" | "neutral" | "negative" {
+// When `brand` is supplied, the response is only positive or negative when the
+// brand is actually named — a generic answer that never mentions the brand is
+// always neutral regardless of its language.
+export function classifyResponse(text: string, brand = ""): "positive" | "neutral" | "negative" {
   if (!text) return "neutral";
+  if (brand && !text.toLowerCase().includes(brand.toLowerCase())) return "neutral";
   if (RESPONSE_NEGATIVE_PATTERNS.some((p) => p.test(text))) return "negative";
   if (RESPONSE_POSITIVE_PATTERNS.some((p) => p.test(text))) return "positive";
   return "neutral";
@@ -404,7 +408,7 @@ export async function fetchPromptsByBrand(
       const q = item.prompt?.trim();
       if (!q || seen.has(q)) continue;
       seen.add(q);
-      const sentiment = classifyResponse(item.answer);
+      const sentiment = classifyResponse(item.answer, brand);
       classified[sentiment].push({ prompt: q, answer: extractBrandSnippet(item.answer, brand) });
     }
   }

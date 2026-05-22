@@ -246,7 +246,18 @@ function TrustTable({ brands }: { brands: MergedBrand[] }) {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 function HighlightBrand({ text, brand }: { text: string; brand: string }) {
-  if (!text || !brand) return <>{text}</>;
+  if (!text) return <span className="italic opacity-50">No response text available.</span>;
+  const brandPresent = brand && text.toLowerCase().includes(brand.toLowerCase());
+  if (!brandPresent) {
+    return (
+      <>
+        {text}
+        <span className="ml-1.5 text-[10px] bg-surface border border-border rounded px-1.5 py-0.5 opacity-60 not-italic">
+          {brand} not mentioned
+        </span>
+      </>
+    );
+  }
   const escaped = brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const parts = text.split(new RegExp(`(${escaped})`, "gi"));
   const lower = brand.toLowerCase();
