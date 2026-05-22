@@ -297,16 +297,43 @@ function exportCSV(brands: PromptsBrand[]) {
 // ─── Sentiment / Query Intelligence ──────────────────────────────────────────
 
 function QueryIntelligenceSection({ brands }: { brands: PromptsBrand[] }) {
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const grand = brands.reduce(
+  const [expanded, setExpanded]           = useState<string | null>(null);
+  const [brandedFilter, setBrandedFilter] = useState<"all" | "branded" | "non-branded">("all");
+  const [keyword, setKeyword]             = useState("");
+
+  function filterEntries(entries: PromptEntry[], brand: string): PromptEntry[] {
+    const kw = keyword.trim().toLowerCase();
+    const bl = brand.toLowerCase();
+    return entries.filter((e) => {
+      const q = e.prompt.toLowerCase();
+      if (brandedFilter === "branded"     && !q.includes(bl)) return false;
+      if (brandedFilter === "non-branded" &&  q.includes(bl)) return false;
+      if (kw && !q.includes(kw)) return false;
+      return true;
+    });
+  }
+
+  const filtered = brands.map((b) => ({
+    ...b,
+    prompts: {
+      positive: filterEntries(b.prompts.positive, b.brand),
+      neutral:  filterEntries(b.prompts.neutral,  b.brand),
+      negative: filterEntries(b.prompts.negative, b.brand),
+    },
+  })).filter((b) =>
+    b.prompts.positive.length + b.prompts.neutral.length + b.prompts.negative.length > 0
+  );
+
+  const grand = filtered.reduce(
     (s, b) => s + b.prompts.positive.length + b.prompts.neutral.length + b.prompts.negative.length, 0
   );
+  const isFiltered = brandedFilter !== "all" || keyword.trim() !== "";
 
   return (
     <div>
-      <div className="flex gap-10 mb-8">
+      <div className="flex gap-10 mb-5">
         {(["positive", "neutral", "negative"] as const).map((t) => {
-          const total = brands.reduce((s, b) => s + b.prompts[t].length, 0);
+          const total = filtered.reduce((s, b) => s + b.prompts[t].length, 0);
           return (
             <KawaiBucket key={t} type={t}
               count={total}
@@ -316,8 +343,48 @@ function QueryIntelligenceSection({ brands }: { brands: PromptsBrand[] }) {
         })}
       </div>
 
+      {/* ── filters ── */}
+      <div className="flex flex-wrap items-center gap-3 mb-5 pb-5 border-b border-border">
+        <div className="flex rounded border border-border overflow-hidden text-xs">
+          {(["all", "branded", "non-branded"] as const).map((v) => (
+            <button key={v} onClick={() => setBrandedFilter(v)}
+              className={`px-3 py-1.5 transition-colors ${
+                brandedFilter === v
+                  ? "bg-highlight text-text"
+                  : "text-muted hover:text-text"
+              }`}>
+              {v === "all" ? "All prompts" : v === "branded" ? "Branded" : "Non-branded"}
+            </button>
+          ))}
+        </div>
+        <input
+          type="text"
+          placeholder="Filter by topic or product…"
+          value={keyword}
+          onChange={(e) => setKeyword(e.target.value)}
+          className="bg-input border border-border rounded px-3 py-1.5 text-xs text-text placeholder-muted focus:outline-none focus:border-border-bright transition-colors w-56"
+        />
+        {isFiltered && (
+          <button
+            onClick={() => { setBrandedFilter("all"); setKeyword(""); }}
+            className="text-xs text-muted hover:text-text transition-colors"
+          >
+            Clear ×
+          </button>
+        )}
+        {isFiltered && (
+          <span className="text-xs text-muted ml-auto">
+            {grand} prompt{grand !== 1 ? "s" : ""} match
+          </span>
+        )}
+      </div>
+
+      {filtered.length === 0 && (
+        <p className="text-muted text-xs py-4 italic">No prompts match the current filters.</p>
+      )}
+
       <div className="space-y-1">
-        {brands.map((b) => {
+        {filtered.map((b) => {
           const isOpen = expanded === b.brand;
           return (
             <div key={b.brand} className="border border-border rounded">
