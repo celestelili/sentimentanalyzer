@@ -304,26 +304,16 @@ function QueryIntelligenceSection({ brands }: { brands: PromptsBrand[] }) {
 
   return (
     <div>
-      <div className="flex items-end justify-between mb-8">
-        <div className="flex gap-10">
-          {(["positive", "neutral", "negative"] as const).map((t) => {
-            const total = brands.reduce((s, b) => s + b.prompts[t].length, 0);
-            return (
-              <KawaiBucket key={t} type={t}
-                count={total}
-                pct={grand > 0 ? Math.round((total / grand) * 100) : 0}
-              />
-            );
-          })}
-        </div>
-        {brands.length > 0 && (
-          <button
-            onClick={() => exportCSV(brands)}
-            className="text-xs text-muted hover:text-text border border-border hover:border-border-bright rounded px-3 py-1.5 transition-colors"
-          >
-            Export CSV ↓
-          </button>
-        )}
+      <div className="flex gap-10 mb-8">
+        {(["positive", "neutral", "negative"] as const).map((t) => {
+          const total = brands.reduce((s, b) => s + b.prompts[t].length, 0);
+          return (
+            <KawaiBucket key={t} type={t}
+              count={total}
+              pct={grand > 0 ? Math.round((total / grand) * 100) : 0}
+            />
+          );
+        })}
       </div>
 
       <div className="space-y-1">
@@ -664,24 +654,34 @@ export default function HomePage() {
           </div>
 
           {/* ── tab bar ── */}
-          <div className="flex gap-0 mb-6 border-b border-border">
-            {(["overview", "intelligence"] as const).map((tab) => (
-              <button key={tab} onClick={() => setActiveTab(tab)}
-                className={`px-5 py-2.5 text-xs uppercase tracking-widest transition-colors border-b-2 -mb-px ${
-                  activeTab === tab
-                    ? "border-purple-bright text-purple-bright"
-                    : "border-transparent text-muted hover:text-text"
-                }`}>
-                {tab === "overview" ? "Overview" : (
-                  <span className="flex items-center gap-1.5">
-                    Query Intelligence
-                    {!allPromptsLoaded && running && (
-                      <span className="spin inline-block w-2.5 h-2.5 rounded-full border-2 border-purple/40 border-t-purple" />
-                    )}
-                  </span>
-                )}
+          <div className="flex items-center justify-between mb-6 border-b border-border">
+            <div className="flex gap-0">
+              {(["overview", "intelligence"] as const).map((tab) => (
+                <button key={tab} onClick={() => setActiveTab(tab)}
+                  className={`px-5 py-2.5 text-xs uppercase tracking-widest transition-colors border-b-2 -mb-px ${
+                    activeTab === tab
+                      ? "border-purple-bright text-purple-bright"
+                      : "border-transparent text-muted hover:text-text"
+                  }`}>
+                  {tab === "overview" ? "Overview" : (
+                    <span className="flex items-center gap-1.5">
+                      Query Intelligence
+                      {!allPromptsLoaded && running && (
+                        <span className="spin inline-block w-2.5 h-2.5 rounded-full border-2 border-purple/40 border-t-purple" />
+                      )}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+            {activeTab === "intelligence" && promptsBrands.length > 0 && (
+              <button
+                onClick={() => exportCSV(promptsBrands)}
+                className="mb-1 text-xs text-purple-bright border border-purple-dim rounded px-4 py-1.5 hover:bg-highlight transition-colors"
+              >
+                Export CSV ↓
               </button>
-            ))}
+            )}
           </div>
 
           {/* ── Overview tab ── */}
