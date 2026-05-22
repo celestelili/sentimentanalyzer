@@ -243,19 +243,97 @@ function TrustTable({ brands }: { brands: MergedBrand[] }) {
   );
 }
 
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
+function HighlightBrand({ text, brand }: { text: string; brand: string }) {
+  if (!text) return <span className="italic opacity-50">No response text available.</span>;
+  const brandPresent = brand && text.toLowerCase().includes(brand.toLowerCase());
+  if (!brandPresent) {
+    return (
+      <>
+        {text}
+        <span className="ml-1.5 text-[10px] bg-surface border border-border rounded px-1.5 py-0.5 opacity-60 not-italic">
+          {brand} not mentioned
+        </span>
+      </>
+    );
+  }
+  const escaped = brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parts = text.split(new RegExp(`(${escaped})`, "gi"));
+  const lower = brand.toLowerCase();
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.toLowerCase() === lower
+          ? <strong key={i} className="text-text font-semibold">{part}</strong>
+          : part
+      )}
+    </>
+  );
+}
+
+function exportCSV(brands: PromptsBrand[]) {
+  const header = ["Brand", "Bucket", "Prompt", "AI Response Snippet"];
+  const rows: string[][] = [header];
+  for (const b of brands) {
+    for (const bucket of ["positive", "neutral", "negative"] as const) {
+      for (const entry of b.prompts[bucket]) {
+        rows.push([b.brand, bucket, entry.prompt, entry.answer]);
+      }
+    }
+  }
+  const csv = rows
+    .map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(","))
+    .join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = "sentiment-analysis.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ─── Sentiment / Query Intelligence ──────────────────────────────────────────
 
 function QueryIntelligenceSection({ brands }: { brands: PromptsBrand[] }) {
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const grand = brands.reduce(
+  const [expanded, setExpanded]           = useState<string | null>(null);
+  const [brandedFilter, setBrandedFilter] = useState<"all" | "branded" | "non-branded">("all");
+  const [keyword, setKeyword]             = useState("");
+
+  function filterEntries(entries: PromptEntry[], brand: string): PromptEntry[] {
+    const kw = keyword.trim().toLowerCase();
+    const bl = brand.toLowerCase();
+    return entries.filter((e) => {
+      const q = e.prompt.toLowerCase();
+      if (brandedFilter === "branded"     && !q.includes(bl)) return false;
+      if (brandedFilter === "non-branded" &&  q.includes(bl)) return false;
+      if (kw && !q.includes(kw)) return false;
+      return true;
+    });
+  }
+
+  const filtered = brands.map((b) => ({
+    ...b,
+    prompts: {
+      positive: filterEntries(b.prompts.positive, b.brand),
+      neutral:  filterEntries(b.prompts.neutral,  b.brand),
+      negative: filterEntries(b.prompts.negative, b.brand),
+    },
+  })).filter((b) =>
+    b.prompts.positive.length + b.prompts.neutral.length + b.prompts.negative.length > 0
+  );
+
+  const grand = filtered.reduce(
     (s, b) => s + b.prompts.positive.length + b.prompts.neutral.length + b.prompts.negative.length, 0
   );
+  const isFiltered = brandedFilter !== "all" || keyword.trim() !== "";
 
   return (
     <div>
-      <div className="flex gap-10 mb-8">
+      <div className="flex gap-10 mb-5">
         {(["positive", "neutral", "negative"] as const).map((t) => {
-          const total = brands.reduce((s, b) => s + b.prompts[t].length, 0);
+          const total = filtered.reduce((s, b) => s + b.prompts[t].length, 0);
           return (
             <KawaiBucket key={t} type={t}
               count={total}
@@ -265,8 +343,48 @@ function QueryIntelligenceSection({ brands }: { brands: PromptsBrand[] }) {
         })}
       </div>
 
+      {/* ── filters ── */}
+      <div className="flex flex-wrap items-center gap-3 mb-5 pb-5 border-b border-border">
+        <div className="flex rounded border border-border overflow-hidden text-xs">
+          {(["all", "branded", "non-branded"] as const).map((v) => (
+            <button key={v} onClick={() => setBrandedFilter(v)}
+              className={`px-3 py-1.5 transition-colors ${
+                brandedFilter === v
+                  ? "bg-highlight text-text"
+                  : "text-muted hover:text-text"
+              }`}>
+              {v === "all" ? "All prompts" : v === "branded" ? "Branded" : "Non-branded"}
+            </button>
+          ))}
+        </div>
+        <input
+          type="text"
+          placeholder="Filter by topic or product…"
+          value={keyword}
+          onChange={(e) => setKeyword(e.target.value)}
+          className="bg-input border border-border rounded px-3 py-1.5 text-xs text-text placeholder-muted focus:outline-none focus:border-border-bright transition-colors w-56"
+        />
+        {isFiltered && (
+          <button
+            onClick={() => { setBrandedFilter("all"); setKeyword(""); }}
+            className="text-xs text-muted hover:text-text transition-colors"
+          >
+            Clear ×
+          </button>
+        )}
+        {isFiltered && (
+          <span className="text-xs text-muted ml-auto">
+            {grand} prompt{grand !== 1 ? "s" : ""} match
+          </span>
+        )}
+      </div>
+
+      {filtered.length === 0 && (
+        <p className="text-muted text-xs py-4 italic">No prompts match the current filters.</p>
+      )}
+
       <div className="space-y-1">
-        {brands.map((b) => {
+        {filtered.map((b) => {
           const isOpen = expanded === b.brand;
           return (
             <div key={b.brand} className="border border-border rounded">
@@ -300,7 +418,9 @@ function QueryIntelligenceSection({ brands }: { brands: PromptsBrand[] }) {
                             <li key={i} className="text-xs leading-relaxed">
                               <span className="text-text font-medium block">&ldquo;{entry.prompt}&rdquo;</span>
                               {entry.answer && (
-                                <span className="text-muted block mt-0.5">{entry.answer}</span>
+                                <span className="text-muted block mt-0.5">
+                                  <HighlightBrand text={entry.answer} brand={b.brand} />
+                                </span>
                               )}
                             </li>
                           ))}
@@ -601,24 +721,34 @@ export default function HomePage() {
           </div>
 
           {/* ── tab bar ── */}
-          <div className="flex gap-0 mb-6 border-b border-border">
-            {(["overview", "intelligence"] as const).map((tab) => (
-              <button key={tab} onClick={() => setActiveTab(tab)}
-                className={`px-5 py-2.5 text-xs uppercase tracking-widest transition-colors border-b-2 -mb-px ${
-                  activeTab === tab
-                    ? "border-purple-bright text-purple-bright"
-                    : "border-transparent text-muted hover:text-text"
-                }`}>
-                {tab === "overview" ? "Overview" : (
-                  <span className="flex items-center gap-1.5">
-                    Query Intelligence
-                    {!allPromptsLoaded && running && (
-                      <span className="spin inline-block w-2.5 h-2.5 rounded-full border-2 border-purple/40 border-t-purple" />
-                    )}
-                  </span>
-                )}
+          <div className="flex items-center justify-between mb-6 border-b border-border">
+            <div className="flex gap-0">
+              {(["overview", "intelligence"] as const).map((tab) => (
+                <button key={tab} onClick={() => setActiveTab(tab)}
+                  className={`px-5 py-2.5 text-xs uppercase tracking-widest transition-colors border-b-2 -mb-px ${
+                    activeTab === tab
+                      ? "border-purple-bright text-purple-bright"
+                      : "border-transparent text-muted hover:text-text"
+                  }`}>
+                  {tab === "overview" ? "Overview" : (
+                    <span className="flex items-center gap-1.5">
+                      Query Intelligence
+                      {!allPromptsLoaded && running && (
+                        <span className="spin inline-block w-2.5 h-2.5 rounded-full border-2 border-purple/40 border-t-purple" />
+                      )}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+            {activeTab === "intelligence" && promptsBrands.length > 0 && (
+              <button
+                onClick={() => exportCSV(promptsBrands)}
+                className="mb-1 text-xs text-purple-bright border border-purple-dim rounded px-4 py-1.5 hover:bg-highlight transition-colors"
+              >
+                Export CSV ↓
               </button>
-            ))}
+            )}
           </div>
 
           {/* ── Overview tab ── */}

@@ -100,8 +100,12 @@ const RESPONSE_NEGATIVE_PATTERNS = [
   /\bcustomers?\s+(complaint|complaints|report issues|have complained)\b/i,
 ];
 
-export function classifyResponse(text: string): "positive" | "neutral" | "negative" {
+// When `brand` is supplied, the response is only positive or negative when the
+// brand is actually named — a generic answer that never mentions the brand is
+// always neutral regardless of its language.
+export function classifyResponse(text: string, brand = ""): "positive" | "neutral" | "negative" {
   if (!text) return "neutral";
+  if (brand && !text.toLowerCase().includes(brand.toLowerCase())) return "neutral";
   if (RESPONSE_NEGATIVE_PATTERNS.some((p) => p.test(text))) return "negative";
   if (RESPONSE_POSITIVE_PATTERNS.some((p) => p.test(text))) return "positive";
   return "neutral";
@@ -370,6 +374,17 @@ async function fetchOneEngine(
   }));
 }
 
+// Extract a ~200-char window from `text` centered on the first occurrence of
+// `brand`. Falls back to the opening slice when the brand isn't found.
+function extractBrandSnippet(text: string, brand: string, windowSize = 220): string {
+  if (!text) return "";
+  const idx = text.toLowerCase().indexOf(brand.toLowerCase());
+  const start = idx === -1 ? 0 : Math.max(0, idx - 80);
+  const end   = Math.min(text.length, start + windowSize);
+  const snippet = text.slice(start, end);
+  return (start > 0 ? "…" : "") + snippet + (end < text.length ? "…" : "");
+}
+
 // Fetches prompts for all engines sequentially (one request at a time) to
 // avoid hitting SE Ranking's rate limit. Each engine call is separated by
 // `delayMs` milliseconds.
@@ -393,8 +408,8 @@ export async function fetchPromptsByBrand(
       const q = item.prompt?.trim();
       if (!q || seen.has(q)) continue;
       seen.add(q);
-      const sentiment = classifyResponse(item.answer);
-      classified[sentiment].push({ prompt: q, answer: item.answer.slice(0, 200) });
+      const sentiment = classifyResponse(item.answer, brand);
+      classified[sentiment].push({ prompt: q, answer: extractBrandSnippet(item.answer, brand) });
     }
   }
 
