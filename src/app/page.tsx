@@ -245,13 +245,24 @@ function TrustTable({ brands }: { brands: MergedBrand[] }) {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
+// Extract a display snippet centered on the brand mention (~220 chars).
+// The full answer is preserved in entry.answer for CSV export.
+function displaySnippet(text: string, brand: string, windowSize = 220): string {
+  if (!text) return "";
+  const idx   = text.toLowerCase().indexOf(brand.toLowerCase());
+  const start = idx === -1 ? 0 : Math.max(0, idx - 80);
+  const end   = Math.min(text.length, start + windowSize);
+  return (start > 0 ? "…" : "") + text.slice(start, end) + (end < text.length ? "…" : "");
+}
+
 function HighlightBrand({ text, brand }: { text: string; brand: string }) {
   if (!text) return <span className="italic opacity-50">No response text available.</span>;
   const brandPresent = brand && text.toLowerCase().includes(brand.toLowerCase());
+  const snippet = displaySnippet(text, brand);
   if (!brandPresent) {
     return (
       <>
-        {text}
+        {snippet}
         <span className="ml-1.5 text-[10px] bg-surface border border-border rounded px-1.5 py-0.5 opacity-60 not-italic">
           {brand} not mentioned
         </span>
@@ -259,7 +270,7 @@ function HighlightBrand({ text, brand }: { text: string; brand: string }) {
     );
   }
   const escaped = brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const parts = text.split(new RegExp(`(${escaped})`, "gi"));
+  const parts = snippet.split(new RegExp(`(${escaped})`, "gi"));
   const lower = brand.toLowerCase();
   return (
     <>
@@ -273,7 +284,7 @@ function HighlightBrand({ text, brand }: { text: string; brand: string }) {
 }
 
 function exportCSV(brands: PromptsBrand[]) {
-  const header = ["Brand", "Bucket", "Prompt", "AI Response Snippet"];
+  const header = ["Brand", "Bucket", "Prompt", "AI Response"];
   const rows: string[][] = [header];
   for (const b of brands) {
     for (const bucket of ["positive", "neutral", "negative"] as const) {
