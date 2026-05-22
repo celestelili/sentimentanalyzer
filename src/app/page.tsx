@@ -243,6 +243,46 @@ function TrustTable({ brands }: { brands: MergedBrand[] }) {
   );
 }
 
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
+function HighlightBrand({ text, brand }: { text: string; brand: string }) {
+  if (!text || !brand) return <>{text}</>;
+  const escaped = brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parts = text.split(new RegExp(`(${escaped})`, "gi"));
+  const lower = brand.toLowerCase();
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.toLowerCase() === lower
+          ? <strong key={i} className="text-text font-semibold">{part}</strong>
+          : part
+      )}
+    </>
+  );
+}
+
+function exportCSV(brands: PromptsBrand[]) {
+  const header = ["Brand", "Bucket", "Prompt", "AI Response Snippet"];
+  const rows: string[][] = [header];
+  for (const b of brands) {
+    for (const bucket of ["positive", "neutral", "negative"] as const) {
+      for (const entry of b.prompts[bucket]) {
+        rows.push([b.brand, bucket, entry.prompt, entry.answer]);
+      }
+    }
+  }
+  const csv = rows
+    .map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(","))
+    .join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = "sentiment-analysis.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ─── Sentiment / Query Intelligence ──────────────────────────────────────────
 
 function QueryIntelligenceSection({ brands }: { brands: PromptsBrand[] }) {
@@ -253,16 +293,26 @@ function QueryIntelligenceSection({ brands }: { brands: PromptsBrand[] }) {
 
   return (
     <div>
-      <div className="flex gap-10 mb-8">
-        {(["positive", "neutral", "negative"] as const).map((t) => {
-          const total = brands.reduce((s, b) => s + b.prompts[t].length, 0);
-          return (
-            <KawaiBucket key={t} type={t}
-              count={total}
-              pct={grand > 0 ? Math.round((total / grand) * 100) : 0}
-            />
-          );
-        })}
+      <div className="flex items-end justify-between mb-8">
+        <div className="flex gap-10">
+          {(["positive", "neutral", "negative"] as const).map((t) => {
+            const total = brands.reduce((s, b) => s + b.prompts[t].length, 0);
+            return (
+              <KawaiBucket key={t} type={t}
+                count={total}
+                pct={grand > 0 ? Math.round((total / grand) * 100) : 0}
+              />
+            );
+          })}
+        </div>
+        {brands.length > 0 && (
+          <button
+            onClick={() => exportCSV(brands)}
+            className="text-xs text-muted hover:text-text border border-border hover:border-border-bright rounded px-3 py-1.5 transition-colors"
+          >
+            Export CSV ↓
+          </button>
+        )}
       </div>
 
       <div className="space-y-1">
@@ -300,7 +350,9 @@ function QueryIntelligenceSection({ brands }: { brands: PromptsBrand[] }) {
                             <li key={i} className="text-xs leading-relaxed">
                               <span className="text-text font-medium block">&ldquo;{entry.prompt}&rdquo;</span>
                               {entry.answer && (
-                                <span className="text-muted block mt-0.5">{entry.answer}</span>
+                                <span className="text-muted block mt-0.5">
+                                  <HighlightBrand text={entry.answer} brand={b.brand} />
+                                </span>
                               )}
                             </li>
                           ))}

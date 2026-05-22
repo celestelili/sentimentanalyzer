@@ -370,6 +370,17 @@ async function fetchOneEngine(
   }));
 }
 
+// Extract a ~200-char window from `text` centered on the first occurrence of
+// `brand`. Falls back to the opening slice when the brand isn't found.
+function extractBrandSnippet(text: string, brand: string, windowSize = 220): string {
+  if (!text) return "";
+  const idx = text.toLowerCase().indexOf(brand.toLowerCase());
+  const start = idx === -1 ? 0 : Math.max(0, idx - 80);
+  const end   = Math.min(text.length, start + windowSize);
+  const snippet = text.slice(start, end);
+  return (start > 0 ? "…" : "") + snippet + (end < text.length ? "…" : "");
+}
+
 // Fetches prompts for all engines sequentially (one request at a time) to
 // avoid hitting SE Ranking's rate limit. Each engine call is separated by
 // `delayMs` milliseconds.
@@ -394,7 +405,7 @@ export async function fetchPromptsByBrand(
       if (!q || seen.has(q)) continue;
       seen.add(q);
       const sentiment = classifyResponse(item.answer);
-      classified[sentiment].push({ prompt: q, answer: item.answer.slice(0, 200) });
+      classified[sentiment].push({ prompt: q, answer: extractBrandSnippet(item.answer, brand) });
     }
   }
 
