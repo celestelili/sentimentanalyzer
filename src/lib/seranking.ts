@@ -403,13 +403,19 @@ export async function fetchLeaderboard(
     allDomains.map((d) => [d.target, d.brand])
   );
 
-  // Rank by leaderboard order when available; fall back to input order
-  const ranked: string[] = rankSource.length > 0
+  // Rank by leaderboard order when available; fall back to input order.
+  // Then append any input domains SE Ranking omitted (brand_presence=0) so
+  // the third competitor always appears in the output.
+  const rankedFromAPI: string[] = rankSource.length > 0
     ? [...rankSource]
         .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0))
         .map((e) => e.domain)
         .filter((d) => domainToBrand[d])
     : allDomains.map((d) => d.target);
+
+  const inputDomains = allDomains.map((d) => d.target);
+  const missing = inputDomains.filter((d) => !rankedFromAPI.includes(d));
+  const ranked = [...rankedFromAPI, ...missing];
 
   // Per-engine totals across all queried domains (denominator for relative SOV)
   const engineTotals: Partial<Record<Engine, number>> = {};
@@ -439,7 +445,7 @@ export async function fetchLeaderboard(
 // GET /ai-search/prompts/by-brand
 // Response: { total: number, date: string, prompts: [{ prompt, volume, type, answer: { text, links } }] }
 //
-// Fetches for all 5 engines in parallel, deduplicates by prompt text, then classifies.
+// 0 retries, 10 s hard timeout, returns [] on any failure — safe to run in parallel.
 async function fetchOneEngine(
   apiKey: string,
   brand: string,
@@ -447,59 +453,70 @@ async function fetchOneEngine(
   engine: Engine,
   limit: number
 ): Promise<Array<{ prompt: string; volume: number; type: string; answer: string }>> {
-  const url = new URL(`${BASE_URL}/ai-search/prompts-by-brand`);
-  url.searchParams.set("brand", brand);
-  url.searchParams.set("source", source.toLowerCase());
-  url.searchParams.set("engine", engine);
-  url.searchParams.set("limit", String(limit));
-  url.searchParams.set("sort", "volume");
-  url.searchParams.set("sort_order", "desc");
+  try {
+    const url = new URL(`${BASE_URL}/ai-search/prompts-by-brand`);
+    url.searchParams.set("brand", brand);
+    url.searchParams.set("source", source.toLowerCase());
+    url.searchParams.set("engine", engine);
+    url.searchParams.set("limit", String(limit));
+    url.searchParams.set("sort", "volume");
+    url.searchParams.set("sort_order", "desc");
 
-  const res = await fetchWithRetry(url.toString(), { headers: authHeaders(apiKey), cache: "no-store" });
-  if (!res.ok) return [];
+    const res = await fetchWithRetry(
+      url.toString(),
+      { headers: authHeaders(apiKey), cache: "no-store" },
+      /* retries    */ 0,
+      /* firstDelay */ 0,
+      /* timeoutMs  */ 10000
+    );
+    if (!res.ok) return [];
 
-  const data = await res.json() as {
-    prompts?: Array<{
-      prompt: string;
-      volume: number;
-      type: string;
-      answer?: { text?: string; links?: string[] };
-    }>;
-  };
-  return (data.prompts ?? []).map((p) => ({
-    prompt: p.prompt,
-    volume: p.volume,
-    type:   p.type,
-    answer: p.answer?.text ?? "",
-  }));
+    const data = await res.json() as {
+      prompts?: Array<{
+        prompt: string;
+        volume: number;
+        type: string;
+        answer?: { text?: string; links?: string[] };
+      }>;
+    };
+    return (data.prompts ?? []).map((p) => ({
+      prompt: p.prompt,
+      volume: p.volume,
+      type:   p.type,
+      answer: p.answer?.text ?? "",
+    }));
+  } catch {
+    return [];
+  }
 }
 
-// Fetches prompts for all engines sequentially (one request at a time) to
-// avoid hitting SE Ranking's rate limit. Each engine call is separated by
-// `delayMs` milliseconds.
+// Fetches prompts for all 5 engines in parallel (each with a 10 s hard timeout
+// and no retries). Total wall-clock time ≈ slowest engine, not sum of all five.
 export async function fetchPromptsByBrand(
   apiKey: string,
   brand: string,
   source: string,
-  delayMs = 300,
+  _delayMs = 300,
   limitPerEngine = 50,
   topicFilter = ""
 ): Promise<{ positive: PromptEntry[]; neutral: PromptEntry[]; negative: PromptEntry[] }> {
+  const topic = topicFilter.trim().toLowerCase();
+
+  const allResults = await Promise.all(
+    ENGINES.map(engine => fetchOneEngine(apiKey, brand, source, engine, limitPerEngine))
+  );
+
   const classified = {
     positive: [] as PromptEntry[],
     neutral:  [] as PromptEntry[],
     negative: [] as PromptEntry[],
   };
-  const seen  = new Set<string>();
-  const topic = topicFilter.trim().toLowerCase();
+  const seen = new Set<string>();
 
-  for (let i = 0; i < ENGINES.length; i++) {
-    if (i > 0) await sleepMs(delayMs);
-    const items = await fetchOneEngine(apiKey, brand, source, ENGINES[i], limitPerEngine);
+  for (const items of allResults) {
     for (const item of items) {
       const q = item.prompt?.trim();
       if (!q || seen.has(q)) continue;
-      // Apply topic filter before storing — skip prompts that don't match
       if (topic && !q.toLowerCase().includes(topic)) continue;
       seen.add(q);
       const sentiment = classifyResponse(item.answer, brand);
