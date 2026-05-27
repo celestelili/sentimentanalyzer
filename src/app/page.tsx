@@ -181,11 +181,49 @@ function SOVTable({ brands }: { brands: OverviewBrand[] }) {
 
 // ─── Trust Exposure table ─────────────────────────────────────────────────────
 
+function InfoTooltip({ text }: { text: string }) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <span className="relative inline-block align-middle ml-1">
+      <span
+        className="cursor-help select-none text-muted opacity-40 hover:opacity-80 transition-opacity"
+        onMouseEnter={() => setVisible(true)}
+        onMouseLeave={() => setVisible(false)}
+      >
+        ⓘ
+      </span>
+      {visible && (
+        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 bg-[#2a2540] border border-border-bright rounded px-3 py-2.5 text-xs text-[#e8e0d4] leading-relaxed z-50 shadow-xl normal-case tracking-normal text-left whitespace-normal pointer-events-none">
+          {text}
+          {/* arrow */}
+          <span className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-border-bright" />
+        </div>
+      )}
+    </span>
+  );
+}
+
 const TRUST_COLS = [
-  { key: "visibility",         label: "Visibility"              },
-  { key: "negativeQueryShare", label: "Neg. Query\n(Inverted)"  },
-  { key: "reviewRisk",         label: "Review Risk\n(Inverted)" },
-  { key: "persuasionStrength", label: "Persuasion"              },
+  {
+    key:   "visibility",
+    label: "Visibility",
+    info:  "Your brand's average Share of Voice across all five AI engines relative to the strongest brand in the comparison set. A score of 100 means your brand has the highest average SOV; 50 means half the leader's SOV.",
+  },
+  {
+    key:   "negativeQueryShare",
+    label: "Neg. Query\n(Inverted)",
+    info:  "The proportion of AI responses about your brand that are classified as negative — criticism, lawsuits, recalls, complaints. Inverted so higher is better: 100 = no negative responses, 60 = 40% of responses are negative.",
+  },
+  {
+    key:   "reviewRisk",
+    label: "Review Risk\n(Inverted)",
+    info:  "The proportion of queries containing review or reliability risk language — e.g. 'complaints', 'defective', 'return', 'warranty claim'. Inverted so higher is better: 100 = no risk-signal queries found.",
+  },
+  {
+    key:   "persuasionStrength",
+    label: "Persuasion",
+    info:  "The proportion of queries showing commercial or purchase intent — e.g. 'best', 'buy', 'recommend', 'deal'. Not inverted: higher means more queries when people are actively ready to buy.",
+  },
 ] as const;
 
 interface MergedBrand extends OverviewBrand {
@@ -221,10 +259,15 @@ function TrustTable({ brands }: { brands: MergedBrand[] }) {
             <th className="text-left py-2 pr-4 font-normal w-28">Brand</th>
             {TRUST_COLS.map((c) => (
               <th key={c.key} className="text-center py-2 px-3 font-normal leading-tight whitespace-pre-line">
-                {c.label}
+                <span className="inline-flex items-center justify-center gap-0.5 whitespace-pre-line">{c.label}<InfoTooltip text={c.info} /></span>
               </th>
             ))}
-            <th className="text-center py-2 px-3 font-normal">Trust Score</th>
+            <th className="text-center py-2 px-3 font-normal">
+              <span className="inline-flex items-center justify-center gap-0.5">
+                Trust Score
+                <InfoTooltip text="Unweighted average of all four signals (Visibility + Neg. Query Share + Review Risk + Persuasion) ÷ 4. Ranges 0–100. 70–100 = strong position; 45–69 = mixed signals; 0–44 = needs attention." />
+              </span>
+            </th>
           </tr>
         </thead>
         <tbody>
