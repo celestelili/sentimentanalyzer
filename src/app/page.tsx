@@ -126,6 +126,10 @@ function SOVTable({ brands }: { brands: OverviewBrand[] }) {
       engineHasData[eng] = max > 0;
     }
   }
+
+  // True when every cell in the table is "—" — all engines returned zero data.
+  const noDataAtAll = brands.length > 0 && ENGINES.every((e) => !engineHasData[e]);
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
@@ -163,6 +167,14 @@ function SOVTable({ brands }: { brands: OverviewBrand[] }) {
           ))}
         </tbody>
       </table>
+      {noDataAtAll && (
+        <div className="mt-4 px-4 py-3 bg-surface border border-border rounded text-xs text-muted leading-relaxed">
+          <span className="text-text font-semibold">No AI citation data found for these domains.</span>{" "}
+          SE Ranking's AI search index covers brands that appear in AI-generated answers (ChatGPT, Perplexity, Gemini, etc.).
+          Local or niche businesses are rarely cited by AI engines — try using the national brand name (e.g.{" "}
+          <span className="text-purple-bright">volvocars.com</span> instead of a local dealership domain) to see citation data.
+        </div>
+      )}
     </div>
   );
 }
