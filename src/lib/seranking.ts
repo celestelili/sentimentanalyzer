@@ -274,15 +274,36 @@ export async function discoverBrand(
   return data.brands?.[0] ?? domain.split(".")[0].replace(/^(.)/, (c) => c.toUpperCase());
 }
 
-// POST /ai-search/overview/leaderboard
-// Response: {
-//   results: { [domain]: { [engine]: { brand_presence: number, link_presence: number } } },
-//   leaderboard: [{ domain, share_of_voice (0–1), rank, brand_presence, link_presence }]
-// }
+// GET /ai-search/overview
+// Response: { summary: { brand_presence: { current: number | null }, ... } }
 //
-// Per-engine SOV is calculated from brand_presence:
-//   engine_total = sum of brand_presence across all domains for that engine
-//   domain_sov   = (domain_brand_presence / engine_total) * 100
+// Returns brand_presence for one domain+engine combination.
+// Used to build per-engine SOV by fetching each domain/engine pair separately.
+async function fetchEnginePresence(
+  apiKey: string,
+  domain: string,
+  source: string,
+  engine: Engine
+): Promise<number> {
+  const url = new URL(`${BASE_URL}/ai-search/overview`);
+  url.searchParams.set("target", domain);
+  url.searchParams.set("source", source.toLowerCase());
+  url.searchParams.set("engine", engine);
+  url.searchParams.set("scope", "base_domain");
+
+  const res = await fetchWithRetry(url.toString(), { headers: authHeaders(apiKey), cache: "no-store" });
+  if (!res.ok) return 0;
+
+  const data = await res.json() as {
+    summary?: { brand_presence?: { current?: number | null } };
+  };
+  return data.summary?.brand_presence?.current ?? 0;
+}
+
+// POST /ai-search/overview/leaderboard
+// Used for brand name discovery and display order.
+// Per-engine SOV is then built from individual overview calls (one per domain×engine)
+// because the leaderboard's `results` field structure is unreliable across API versions.
 export async function fetchLeaderboard(
   apiKey: string,
   primary: { target: string; brand: string },
@@ -304,44 +325,69 @@ export async function fetchLeaderboard(
   if (!res.ok) await handleError(res);
 
   const data = await res.json() as {
-    results: Record<string, Record<string, { brand_presence: number; link_presence: number }>>;
-    leaderboard: Array<{ domain: string; share_of_voice: number; rank: number }>;
+    leaderboard?: Array<{ domain: string; share_of_voice?: number; rank?: number }>;
+    [key: string]: unknown;
   };
 
-  // Build domain → brand map from what we passed in
-  const domainToBrand: Record<string, string> = {
-    [primary.target]: primary.brand,
-    ...Object.fromEntries(competitors.map((c) => [c.target, c.brand])),
-  };
+  // Log structure for diagnosing future API changes (values omitted, keys only)
+  try {
+    const topKeys = Object.keys(data);
+    const lbSample = data.leaderboard?.[0] ? Object.keys(data.leaderboard[0]) : [];
+    console.error("[leaderboard] top-level keys:", topKeys, "leaderboard[0] keys:", lbSample);
+  } catch { /* never block on logging */ }
 
-  // For each engine, sum brand_presence across all queried domains.
-  // This is the denominator for per-engine relative SOV among the queried brands.
-  // When total = 0 for an engine, no queried brand has any citations there —
-  // sov stays 0 and the UI shows "—" rather than "0%".
+  // Build domain → brand map
+  const allDomains = [primary, ...competitors];
+  const domainToBrand: Record<string, string> = Object.fromEntries(
+    allDomains.map((d) => [d.target, d.brand])
+  );
+
+  // Use leaderboard rank order when available; fall back to input order
+  const ranked: string[] = (() => {
+    const lb = data.leaderboard ?? [];
+    if (lb.length > 0) {
+      return [...lb]
+        .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0))
+        .map((e) => e.domain)
+        .filter((d) => domainToBrand[d]);
+    }
+    return allDomains.map((d) => d.target);
+  })();
+
+  // ── Per-engine brand_presence via overview endpoint ──────────────────────────
+  // Fetch all 5 engines for each domain sequentially (domain by domain, engines
+  // in parallel per domain) to stay within SE Ranking's rate limits.
+  const presenceMap: Record<string, Partial<Record<Engine, number>>> = {};
+
+  for (let di = 0; di < ranked.length; di++) {
+    const domain = ranked[di];
+    if (di > 0) await sleepMs(300);
+
+    // All 5 engines in parallel for this domain
+    const results = await Promise.all(
+      ENGINES.map((engine) => fetchEnginePresence(apiKey, domain, source, engine))
+    );
+    presenceMap[domain] = Object.fromEntries(
+      ENGINES.map((engine, i) => [engine, results[i]])
+    ) as Partial<Record<Engine, number>>;
+  }
+
+  // Per-engine totals (denominator for relative SOV)
   const engineTotals: Partial<Record<Engine, number>> = {};
   for (const engine of ENGINES) {
-    engineTotals[engine] = Object.values(data.results ?? {}).reduce(
-      (sum, domainData) => sum + (domainData[engine]?.brand_presence ?? 0),
+    engineTotals[engine] = ranked.reduce(
+      (sum, domain) => sum + (presenceMap[domain]?.[engine] ?? 0),
       0
     );
   }
 
-  // Sort by leaderboard rank
-  const ranked = [...(data.leaderboard ?? [])].sort((a, b) => a.rank - b.rank);
-
-  return ranked.map(({ domain }) => {
-    const domainData = (data.results ?? {})[domain] ?? {};
+  return ranked.map((domain) => {
     const sov: EngineSOV = { chatgpt: 0, perplexity: 0, gemini: 0, ai_overview: 0, ai_mode: 0 };
-
     for (const engine of ENGINES) {
-      const presence = domainData[engine]?.brand_presence ?? 0;
+      const presence = presenceMap[domain]?.[engine] ?? 0;
       const total    = engineTotals[engine] ?? 0;
-      // SOV is relative share among queried brands. When total is 0, no brand in
-      // the comparison set has any citations for this engine — leave as 0 so the
-      // UI can distinguish "no data" from a genuine zero.
       sov[ENGINE_KEY_MAP[engine]] = total > 0 ? Math.round((presence / total) * 100) : 0;
     }
-
     return { brand: domainToBrand[domain] ?? domain, sov };
   });
 }
