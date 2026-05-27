@@ -189,8 +189,13 @@ function sleepMs(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-function isRateLimit(status: number, text: string): boolean {
-  return status === 429 || (status === 500 && text.toLowerCase().includes("too many"));
+// Returns true for transient errors worth retrying automatically:
+// rate limits (429), rate-limit disguised as 500, and gateway timeouts (502/503/504).
+function isRetryable(status: number, text: string): boolean {
+  if (status === 429) return true;
+  if (status === 502 || status === 503 || status === 504) return true;
+  if (status === 500 && text.toLowerCase().includes("too many")) return true;
+  return false;
 }
 
 async function handleError(res: Response): Promise<never> {
@@ -198,6 +203,9 @@ async function handleError(res: Response): Promise<never> {
     401: "Invalid API key — check your SE Ranking credentials and ensure API access is enabled on your plan.",
     403: "Access denied — your SE Ranking plan may not include this API endpoint.",
     429: "SE Ranking rate limit reached — wait a moment and try again.",
+    502: "SE Ranking is temporarily unavailable (502 Bad Gateway). Please try again in a moment.",
+    503: "SE Ranking is temporarily unavailable (503 Service Unavailable). Please try again in a moment.",
+    504: "SE Ranking request timed out (504 Gateway Timeout). Please try again — this is usually transient.",
   };
   if (FRIENDLY[res.status]) throw new Error(FRIENDLY[res.status]);
 
@@ -215,8 +223,8 @@ async function handleError(res: Response): Promise<never> {
   throw new Error(`SE Ranking error ${res.status}${detail ? `: ${detail}` : "."}`);
 }
 
-// Wraps fetch with up to `retries` automatic retries on rate-limit responses.
-// Waits 3 s, then 6 s, then 12 s before each successive retry.
+// Wraps fetch with up to `retries` automatic retries on transient errors
+// (rate limits and gateway timeouts). Waits 3 s → 6 s → 12 s between attempts.
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
@@ -225,12 +233,13 @@ async function fetchWithRetry(
   let delay = 3000;
   for (let attempt = 0; attempt <= retries; attempt++) {
     const res = await fetch(url, init);
-    if (res.status !== 429 && !(res.status === 500)) return res;
 
-    // Peek at body to see if it's really a rate-limit 500
+    // Success or a definitive client error (4xx except 429) — return immediately.
+    if (res.ok || (res.status >= 400 && res.status < 500 && res.status !== 429)) return res;
+
+    // Peek at body to decide whether this error is worth retrying.
     const text = await res.text().catch(() => "");
-    if (!isRateLimit(res.status, text)) {
-      // Re-wrap the consumed body so callers can still read it
+    if (!isRetryable(res.status, text)) {
       return new Response(text, { status: res.status, headers: res.headers });
     }
 
