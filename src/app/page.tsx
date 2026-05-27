@@ -464,12 +464,12 @@ function cleanDomain(raw: string): string {
 }
 
 export default function HomePage() {
-  const [apiKey, setApiKey]             = useState("");
-  const [country, setCountry]           = useState("US");
-  const [targetDomain, setTarget]       = useState("");
-  const [competitor1, setComp1]         = useState("");
-  const [competitor2, setComp2]         = useState("");
-  const [promptLimit, setPromptLimit]   = useState(10);
+  const [apiKey, setApiKey]         = useState("");
+  const [country, setCountry]       = useState("US");
+  const [targetDomain, setTarget]   = useState("");
+  const [competitor1, setComp1]     = useState("");
+  const [competitor2, setComp2]     = useState("");
+  const [topicFilter, setTopic]     = useState("");
 
   const [running, setRunning]           = useState(false);
   const [steps, setSteps]               = useState<Step[]>([]);
@@ -584,7 +584,7 @@ export default function HomePage() {
             const pr = await fetch("/api/prompts", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ apiKey: trimmedKey, country, brands: [brand], limitPerEngine: promptLimit }),
+              body: JSON.stringify({ apiKey: trimmedKey, country, brands: [brand], topicFilter: topicFilter.trim() }),
             });
             const pd = await pr.json();
             if (pr.ok && pd.brands?.[0]) {
@@ -604,10 +604,10 @@ export default function HomePage() {
     } finally {
       setRunning(false);
     }
-  }, [apiKey, country, targetDomain, competitor1, competitor2, promptLimit]);
+  }, [apiKey, country, targetDomain, competitor1, competitor2, topicFilter]);
 
   const clear = useCallback(() => {
-    setApiKey(""); setCountry("US"); setTarget(""); setComp1(""); setComp2(""); setPromptLimit(10);
+    setApiKey(""); setCountry("US"); setTarget(""); setComp1(""); setComp2(""); setTopic("");
     setOverview(null); setPromptsBrands([]); setError(null); setSteps([]);
     setActiveTab("overview");
   }, []);
@@ -682,20 +682,12 @@ export default function HomePage() {
             </div>
 
             <div>
-              <Label>Prompts per engine</Label>
-              <div className="flex rounded border border-border overflow-hidden text-sm" style={{ width: "fit-content" }}>
-                {([10, 20, 50] as const).map((n) => (
-                  <button key={n} type="button" onClick={() => setPromptLimit(n)}
-                    className={`px-4 py-2 transition-colors ${
-                      promptLimit === n ? "bg-highlight text-text" : "text-muted hover:text-text"
-                    }`}>
-                    {n}
-                  </button>
-                ))}
-              </div>
-              <p className="text-muted text-xs mt-1">
-                {promptLimit === 10 ? "Faster — less timeout risk" : promptLimit === 20 ? "Balanced" : "Most data — slower"}
-              </p>
+              <Label>Topic / product filter (optional)</Label>
+              <input type="text" placeholder="e.g. SUV, lease, service"
+                value={topicFilter} onChange={(e) => setTopic(e.target.value)}
+                maxLength={80}
+                className="w-full bg-input border border-border rounded px-4 py-2.5 text-sm text-text placeholder-muted focus:outline-none focus:border-border-bright transition-colors" />
+              <p className="text-muted text-xs mt-1">Only prompts containing this keyword will be fetched and stored.</p>
             </div>
           </div>
 

@@ -43,14 +43,12 @@ export async function POST(req: NextRequest) {
     }
 
     // ── live mode — sequential across brands, parallel engines within each ─
-    const source = (typeof body.country === "string" ? body.country : "us").toLowerCase();
-    const limitPerEngine = typeof body.limitPerEngine === "number"
-      ? Math.max(5, Math.min(50, Math.round(body.limitPerEngine)))
-      : 10;
+    const source      = (typeof body.country === "string" ? body.country : "us").toLowerCase();
+    const topicFilter = typeof body.topicFilter === "string" ? body.topicFilter.trim().toLowerCase() : "";
     const result = [];
 
     for (const brand of brands) {
-      const prompts = await fetchPromptsByBrand(apiKey, brand, source, 300, limitPerEngine);
+      const prompts = await fetchPromptsByBrand(apiKey, brand, source, 300, 50, topicFilter);
       result.push({ brand, ...scorePrompts(prompts), prompts });
     }
 

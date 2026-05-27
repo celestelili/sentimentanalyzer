@@ -392,14 +392,16 @@ export async function fetchPromptsByBrand(
   brand: string,
   source: string,
   delayMs = 300,
-  limitPerEngine = 10
+  limitPerEngine = 50,
+  topicFilter = ""
 ): Promise<{ positive: PromptEntry[]; neutral: PromptEntry[]; negative: PromptEntry[] }> {
   const classified = {
     positive: [] as PromptEntry[],
     neutral:  [] as PromptEntry[],
     negative: [] as PromptEntry[],
   };
-  const seen = new Set<string>();
+  const seen  = new Set<string>();
+  const topic = topicFilter.trim().toLowerCase();
 
   for (let i = 0; i < ENGINES.length; i++) {
     if (i > 0) await sleepMs(delayMs);
@@ -407,6 +409,8 @@ export async function fetchPromptsByBrand(
     for (const item of items) {
       const q = item.prompt?.trim();
       if (!q || seen.has(q)) continue;
+      // Apply topic filter before storing — skip prompts that don't match
+      if (topic && !q.toLowerCase().includes(topic)) continue;
       seen.add(q);
       const sentiment = classifyResponse(item.answer, brand);
       classified[sentiment].push({ prompt: q, answer: item.answer });
