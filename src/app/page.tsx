@@ -310,6 +310,57 @@ function displaySnippet(text: string, brand: string, windowSize = 220): string {
   return (start > 0 ? "…" : "") + text.slice(start, end) + (end < text.length ? "…" : "");
 }
 
+// ─── Topic-filtered SOV ──────────────────────────────────────────────────────
+// Computes relative brand presence from the already-fetched (and topic-filtered)
+// prompt data. Shown in the Overview tab when a topic filter is active, giving
+// users "of all [topic] AI queries, what % cite each brand?"
+
+function TopicSOVSection({ brands, topic }: { brands: PromptsBrand[]; topic: string }) {
+  const rows = brands
+    .map((b) => ({
+      brand: b.brand,
+      total: b.prompts.positive.length + b.prompts.neutral.length + b.prompts.negative.length,
+    }))
+    .sort((a, b) => b.total - a.total);
+
+  const grandTotal = rows.reduce((s, r) => s + r.total, 0);
+  if (grandTotal === 0) {
+    return (
+      <p className="text-muted text-xs italic">
+        No prompts matched &ldquo;{topic}&rdquo; for any brand.
+      </p>
+    );
+  }
+
+  const maxCount = rows[0].total;
+
+  return (
+    <div className="space-y-3">
+      {rows.map(({ brand, total }) => {
+        const pct = Math.round((total / grandTotal) * 100);
+        const barPct = maxCount > 0 ? Math.round((total / maxCount) * 100) : 0;
+        return (
+          <div key={brand} className="flex items-center gap-3">
+            <span className="text-xs font-semibold text-purple-bright w-28 truncate">{brand}</span>
+            <div className="flex-1 h-2 bg-highlight rounded overflow-hidden">
+              <div
+                className="h-full rounded"
+                style={{ width: `${barPct}%`, backgroundColor: "#9B8FD4" }}
+              />
+            </div>
+            <span className="text-xs tabular-nums text-text w-8 text-right font-semibold">{pct}%</span>
+            <span className="text-xs text-muted opacity-60">({total} prompts)</span>
+          </div>
+        );
+      })}
+      <p className="text-muted text-xs mt-1 opacity-60">
+        Based on {grandTotal} prompt{grandTotal !== 1 ? "s" : ""} matching &ldquo;{topic}&rdquo; across all brands.
+        {brands.length < 3 && " More brands may load shortly."}
+      </p>
+    </div>
+  );
+}
+
 function HighlightBrand({ text, brand }: { text: string; brand: string }) {
   if (!text) return <span className="italic opacity-50">No response text available.</span>;
   const brandPresent = brand && text.toLowerCase().includes(brand.toLowerCase());
@@ -845,6 +896,19 @@ export default function HomePage() {
                   <SOVTable brands={overviewResult.brands} />
                 </div>
               </div>
+
+              {/* Topic-filtered SOV — only shown when a topic filter is active */}
+              {topicFilter.trim() && promptsBrands.length > 0 && (
+                <div>
+                  <SectionTitle>
+                    Topic SOV — &ldquo;{topicFilter.trim()}&rdquo; (brand share of matching prompts)
+                  </SectionTitle>
+                  <div className="bg-surface border border-border rounded-lg p-5 mt-3">
+                    <TopicSOVSection brands={promptsBrands} topic={topicFilter.trim()} />
+                  </div>
+                </div>
+              )}
+
               <div>
                 <SectionTitle>Trust Exposure Score (unweighted average of four signals, 0 to 100)</SectionTitle>
                 <div className="bg-surface border border-border rounded-lg p-5 mt-3">

@@ -346,7 +346,7 @@ async function fetchLeaderboardForEngine(
       },
       /* retries    */ 0,
       /* firstDelay */ 0,
-      /* timeoutMs  */ 8000
+      /* timeoutMs  */ 12000
     );
     if (!res.ok) return { ok: false, results: {}, leaderboard: [] };
     const data = await res.json() as {
@@ -365,20 +365,22 @@ export async function fetchLeaderboard(
   primary: { target: string; brand: string },
   competitors: { target: string; brand: string }[],
   source: string,
-  delayMs = 600
 ): Promise<LeaderboardEntry[]> {
+  // Fire all 5 engine calls in parallel. Each has a 12 s hard timeout and
+  // never retries. Total wall-clock time = max of the 5 calls (~6–12 s),
+  // not their sum — this is the fix for Vercel's 60 s function limit.
+  const settled = await Promise.allSettled(
+    ENGINES.map(engine => fetchLeaderboardForEngine(apiKey, primary, competitors, source, engine))
+  );
+
   const results: Record<string, Record<string, { brand_presence?: number | null; link_presence?: number | null }>> = {};
   let rankSource: Array<{ domain: string; rank?: number }> = [];
   let succeeded = 0;
 
-  for (let i = 0; i < ENGINES.length; i++) {
-    if (i > 0) await sleepMs(delayMs);
-    const engine = ENGINES[i];
-    const { ok, results: r, leaderboard: lb } = await fetchLeaderboardForEngine(
-      apiKey, primary, competitors, source, engine
-    );
-    if (!ok) continue;
+  for (const result of settled) {
+    if (result.status !== "fulfilled" || !result.value.ok) continue;
     succeeded++;
+    const { results: r, leaderboard: lb } = result.value;
     for (const [domain, perEngine] of Object.entries(r)) {
       results[domain] ??= {};
       for (const [eng, vals] of Object.entries(perEngine)) {
@@ -388,12 +390,10 @@ export async function fetchLeaderboard(
     if (rankSource.length === 0 && lb.length > 0) rankSource = lb;
   }
 
-  // If every single engine call failed, surface a clear message rather than
-  // returning a silently empty SOV table.
   if (succeeded === 0) {
     throw new Error(
-      "SE Ranking's AI search API is temporarily slow (all 5 engine calls timed out). " +
-      "This usually clears within a minute — please try again."
+      "SE Ranking's leaderboard API timed out on all 5 engines. " +
+      "This is usually transient — please wait a moment and try again."
     );
   }
 
