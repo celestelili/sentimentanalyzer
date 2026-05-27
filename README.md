@@ -9,7 +9,7 @@ A brand intelligence tool that measures how your brand appears across AI-powered
 When someone searches for your product category in an AI search engine, your brand either appears — or it doesn't. This tool measures:
 
 - **How often** your brand is cited across each AI engine (Share of Voice)
-- **What kind of queries** surface your brand — buying intent, neutral research, or complaints
+- **How the AI responds** about your brand — positive, neutral, or critical tone
 - **How exposed** your brand is to trust-damaging content in AI answers (Trust Exposure Score)
 
 You can compare up to three domains side by side: your own site plus two competitors.
@@ -23,7 +23,7 @@ You can compare up to three domains side by side: your own site plus two competi
 3. Enter your **target domain** and up to two **competitor domains** (e.g. `sony.com`, `samsung.com`, `lg.com`).
 4. Click **Run Analysis**.
 
-The tool runs in stages and shows you a live progress log as each step completes. The Overview tab appears as soon as leaderboard data is ready; trust scores and query lists fill in brand by brand as prompts are fetched.
+The tool runs in stages and shows a live progress log as each step completes. The Overview tab appears as soon as leaderboard data is ready; trust scores and query lists fill in brand by brand as prompts are fetched.
 
 ---
 
@@ -42,6 +42,8 @@ domain_SOV   = (domain_brand_presence / engine_total) × 100
 ```
 
 The result is a percentage (0–100). A score of 40% means 40% of all brand citations in that engine belong to your brand. The highest-scoring brand per engine is highlighted in the table.
+
+When SE Ranking returns no citation data for an engine, the cell shows `—` rather than `0%` to distinguish genuine zero-share from missing data.
 
 **Engines tracked:**
 | Engine | What it covers |
@@ -73,28 +75,18 @@ A score of 100 means your brand has the highest average SOV among the brands bei
 
 #### Signal 2 — Negative Query Share (inverted)
 
-Measures what proportion of queries surfacing your brand are classified as negative — complaints, problems, defects, litigation, competitor comparisons.
+Measures what proportion of queries surfacing your brand have AI responses classified as negative — criticism, complaints, litigation, or problems.
 
 ```
-negative_pct        = (negative_query_count / total_queries) × 100
+negative_pct         = (negative_response_count / total_responses) × 100
 Negative Query Share = 100 − negative_pct
 ```
 
-The score is **inverted** so that higher = safer. A score of 100 means none of the queries surfacing your brand are negative. A score of 60 means 40% of queries are negative.
-
-**Queries are classified as negative if they match patterns including:**
-- Complaints, problems, issues, errors, failures
-- "Alternative to", "instead of", "replacement"
-- Comparisons and "vs." queries
-- Hardware problems: overheating, freezing, crashing, lag
-- Sentiment: worst, terrible, awful, disappointed
-- Repair: "how to fix", broken screen, dead pixel
-- Legal/privacy: lawsuit, recall, scam, data collection
-- Failure states: "not working", "won't turn on", black screen
+The score is **inverted** so that higher = safer. A score of 100 means none of the AI responses about your brand are negative. A score of 60 means 40% of responses carry negative sentiment.
 
 #### Signal 3 — Review Risk (inverted)
 
-Measures the proportion of queries that indicate review-related or reliability-related risk — language that suggests customers are researching quality issues or seeking refunds.
+Measures the proportion of queries that indicate review-related or reliability-related risk — language in the prompt that suggests customers are researching quality issues or seeking refunds.
 
 ```
 risk_pct    = (risk_query_count / total_queries) × 100
@@ -120,13 +112,6 @@ Persuasion Strength = persuasion_pct
 
 This signal is **not inverted** — more purchase-intent queries means your brand is being discovered when people are ready to buy.
 
-**Queries are classified as purchase intent if they contain:**
-- Buying language: "buy", "purchase", "order"
-- Recommendation language: "best", "top", "recommend", "worth it", "should I get"
-- Deal language: "deal", "discount", "sale", "price", "cheapest", "affordable"
-- Recency signals: "2024", "2025", "new", "latest", "upgrade", "Black Friday"
-- Use-case queries: "for gaming", "for movies", "for home theater"
-
 #### Final Score
 
 ```
@@ -146,17 +131,46 @@ All four signals are given equal weight. The score is rounded to the nearest who
 
 ### Query Intelligence (Sentiment Bucket Breakdown)
 
-Every query SE Ranking tracks for your brand is classified into one of three buckets:
+The Query Intelligence tab shows every prompt SE Ranking tracks for your brand, classified by the **tone of the AI's response** — not by what the user searched for.
 
-| Bucket | Description |
+#### How sentiment is classified
+
+Each prompt has an AI-generated answer from SE Ranking. The tool reads that answer text and classifies it:
+
+| Bucket | How the AI responded |
 |---|---|
-| **Positive** | Purchase intent, recommendations, deal-seeking, use-case research |
-| **Neutral** | Informational — specs, tutorials, comparisons without strong sentiment |
-| **Negative** | Complaints, problems, alternatives, legal issues, failure states |
+| **Positive** | Response contains praise language — "highly recommended", "market leader", "is known for quality", "award-winning", "trusted brand", "widely considered one of the best" |
+| **Negative** | Response contains criticism language — "has faced criticism", "has been criticized", "controversy", "lawsuit", "recall", "widespread complaints", "customers have complained" |
+| **Neutral** | Response is informational without strong brand sentiment, or the brand is not mentioned in the response at all |
 
-The Query Intelligence tab shows:
-- Total query counts and percentages per bucket across all brands
-- Per-brand breakdown with expandable query lists so you can read the exact phrases AI engines are associating with your brand
+A prompt is only classified as positive or negative when the brand name appears in the AI's answer. If the AI gives a generic answer without naming the brand, the response is always neutral — this is useful signal in itself, showing where your brand is being omitted.
+
+#### Reading the results
+
+Each prompt entry shows:
+- The **query** the user asked (in bold)
+- A **snippet of the AI's answer**, with the brand name bolded wherever it appears
+- A **"brand not mentioned"** badge when the brand name is absent from the response
+
+This lets you quickly see which queries drive brand-specific AI responses versus which ones produce generic answers where your brand is invisible.
+
+#### Filters
+
+Two filters let you cut through noise and focus on the prompts that matter:
+
+**Branded / Non-branded toggle:**
+- **Branded** — shows only prompts where the query explicitly names the brand (e.g. "Sony OLED TV review"). These are direct brand queries.
+- **Non-branded** — shows only prompts where the brand name is absent from the query (e.g. "best OLED TV for movies"). These reveal how your brand performs in category-level searches.
+- **All prompts** — no filter applied (default).
+
+**Keyword filter:**
+Type any word or phrase to narrow results to prompts containing that text. Use this to focus on a specific product, service, or topic — for example "delivery", "catering", "organic", or "pricing". The filter matches any substring in the prompt text and can be combined with the branded toggle.
+
+Bucket counts, accordion totals, and the match count update in real time. Brands with zero matching prompts are hidden. A **Clear ×** link resets all filters.
+
+#### Export
+
+Click **Export CSV ↓** in the tab bar to download all visible prompt data as a CSV file with columns: Brand, Bucket, Prompt, AI Response Snippet. The file opens directly in Google Sheets or Excel.
 
 ---
 

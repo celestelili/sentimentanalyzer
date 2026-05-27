@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchPromptsByBrand, scorePrompts, type PromptEntry } from "@/lib/seranking";
 import { MOCK_PROMPTS } from "@/lib/mockData";
 
+// Allow up to 60 s on Vercel — fetching prompts across 5 engines per brand
+// can take 20–40 s depending on SE Ranking response times.
+export const maxDuration = 60;
+
 const API_KEY_RE = /^[A-Za-z0-9_\-]{10,200}$/;
 
 function validateApiKey(raw: unknown): string | null {
@@ -39,11 +43,12 @@ export async function POST(req: NextRequest) {
     }
 
     // ── live mode — sequential across brands, parallel engines within each ─
-    const source = (typeof body.country === "string" ? body.country : "us").toLowerCase();
+    const source      = (typeof body.country === "string" ? body.country : "us").toLowerCase();
+    const topicFilter = typeof body.topicFilter === "string" ? body.topicFilter.trim().toLowerCase() : "";
     const result = [];
 
     for (const brand of brands) {
-      const prompts = await fetchPromptsByBrand(apiKey, brand, source);
+      const prompts = await fetchPromptsByBrand(apiKey, brand, source, 300, 50, topicFilter);
       result.push({ brand, ...scorePrompts(prompts), prompts });
     }
 

@@ -189,8 +189,13 @@ function sleepMs(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-function isRateLimit(status: number, text: string): boolean {
-  return status === 429 || (status === 500 && text.toLowerCase().includes("too many"));
+// Returns true for transient errors worth retrying automatically:
+// rate limits (429), rate-limit disguised as 500, and gateway timeouts (502/503/504).
+function isRetryable(status: number, text: string): boolean {
+  if (status === 429) return true;
+  if (status === 502 || status === 503 || status === 504) return true;
+  if (status === 500 && text.toLowerCase().includes("too many")) return true;
+  return false;
 }
 
 async function handleError(res: Response): Promise<never> {
@@ -198,6 +203,9 @@ async function handleError(res: Response): Promise<never> {
     401: "Invalid API key — check your SE Ranking credentials and ensure API access is enabled on your plan.",
     403: "Access denied — your SE Ranking plan may not include this API endpoint.",
     429: "SE Ranking rate limit reached — wait a moment and try again.",
+    502: "SE Ranking is temporarily unavailable (502 Bad Gateway). Please try again in a moment.",
+    503: "SE Ranking is temporarily unavailable (503 Service Unavailable). Please try again in a moment.",
+    504: "SE Ranking request timed out (504 Gateway Timeout). Please try again — this is usually transient.",
   };
   if (FRIENDLY[res.status]) throw new Error(FRIENDLY[res.status]);
 
@@ -215,27 +223,59 @@ async function handleError(res: Response): Promise<never> {
   throw new Error(`SE Ranking error ${res.status}${detail ? `: ${detail}` : "."}`);
 }
 
-// Wraps fetch with up to `retries` automatic retries on rate-limit responses.
-// Waits 3 s, then 6 s, then 12 s before each successive retry.
+// Wraps fetch with up to `retries` automatic retries on transient errors
+// (rate limits and gateway timeouts). Waits `firstDelay` ms between attempts,
+// doubling each time. An optional `timeoutMs` aborts each individual attempt
+// after that many milliseconds so callers can bound total wall-clock time.
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
-  retries = 3
+  retries = 3,
+  firstDelay = 3000,
+  timeoutMs?: number
 ): Promise<Response> {
-  let delay = 3000;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    const res = await fetch(url, init);
-    if (res.status !== 429 && !(res.status === 500)) return res;
+  let delay = firstDelay;
 
-    // Peek at body to see if it's really a rate-limit 500
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    // Wire up a per-attempt AbortController when a timeout is requested.
+    let controller: AbortController | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (timeoutMs) {
+      controller = new AbortController();
+      timer = setTimeout(() => controller!.abort(), timeoutMs);
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(url, controller ? { ...init, signal: controller.signal } : init);
+    } catch (err) {
+      if (timer) clearTimeout(timer);
+      // AbortError means the per-attempt timeout fired — treat like a 504.
+      if (err instanceof Error && err.name === "AbortError") {
+        if (attempt === retries) {
+          throw new Error(
+            "SE Ranking request timed out. The leaderboard endpoint is slow right now — please try again in a moment."
+          );
+        }
+        await sleepMs(delay);
+        delay *= 2;
+        continue;
+      }
+      throw err;
+    }
+    if (timer) clearTimeout(timer);
+
+    // Success or a definitive client error (4xx except 429) — return immediately.
+    if (res.ok || (res.status >= 400 && res.status < 500 && res.status !== 429)) return res;
+
+    // Peek at body to decide whether this error is worth retrying.
     const text = await res.text().catch(() => "");
-    if (!isRateLimit(res.status, text)) {
-      // Re-wrap the consumed body so callers can still read it
-      return new Response(text, { status: res.status, headers: res.headers });
+    if (!isRetryable(res.status, text)) {
+      return new Response(text, { status: res.status });
     }
 
     if (attempt === retries) {
-      return new Response(text, { status: res.status, headers: res.headers });
+      return new Response(text, { status: res.status });
     }
 
     await sleepMs(delay);
@@ -266,70 +306,129 @@ export async function discoverBrand(
 }
 
 // POST /ai-search/overview/leaderboard
-// Response: {
-//   results: { [domain]: { [engine]: { brand_presence: number, link_presence: number } } },
-//   leaderboard: [{ domain, share_of_voice (0–1), rank, brand_presence, link_presence }]
+// Verified response shape:
+// {
+//   results: { [domain]: { [engine]: { brand_presence, link_presence } } },
+//   leaderboard: [{ rank, domain, brand_presence, link_presence, share_of_voice, is_primary_target }]
 // }
 //
-// Per-engine SOV is calculated from brand_presence:
-//   engine_total = sum of brand_presence across all domains for that engine
-//   domain_sov   = (domain_brand_presence / engine_total) * 100
+// Calls the endpoint once per engine sequentially (with `delayMs` between
+// calls) instead of asking for all 5 at once. Each call has a hard 8 s cap
+// and never retries — if an engine 504s, we just skip it and continue.
+// Total worst-case wall-clock: 5 × 8 s + 4 × 0.6 s ≈ 42 s (within Vercel's 60 s).
+//
+// Never throws — failures are reported via the returned `failed` array.
+async function fetchLeaderboardForEngine(
+  apiKey: string,
+  primary: { target: string; brand: string },
+  competitors: { target: string; brand: string }[],
+  source: string,
+  engine: Engine
+): Promise<{
+  ok: boolean;
+  results: Record<string, Record<string, { brand_presence?: number | null; link_presence?: number | null }>>;
+  leaderboard: Array<{ domain: string; share_of_voice?: number; rank?: number; brand_presence?: number }>;
+}> {
+  try {
+    const res = await fetchWithRetry(
+      `${BASE_URL}/ai-search/overview/leaderboard`,
+      {
+        method: "POST",
+        headers: authHeaders(apiKey),
+        body: JSON.stringify({
+          primary,
+          competitors,
+          source: source.toLowerCase(),
+          engines: [engine],
+          scope: "base_domain",
+        }),
+        cache: "no-store",
+      },
+      /* retries    */ 0,
+      /* firstDelay */ 0,
+      /* timeoutMs  */ 12000
+    );
+    if (!res.ok) return { ok: false, results: {}, leaderboard: [] };
+    const data = await res.json() as {
+      results?: Record<string, Record<string, { brand_presence?: number | null; link_presence?: number | null }>>;
+      leaderboard?: Array<{ domain: string; share_of_voice?: number; rank?: number; brand_presence?: number }>;
+    };
+    return { ok: true, results: data.results ?? {}, leaderboard: data.leaderboard ?? [] };
+  } catch {
+    return { ok: false, results: {}, leaderboard: [] };
+  }
+}
+
+// Per-engine SOV = (domain_brand_presence / sum_of_brand_presence_for_engine) * 100
 export async function fetchLeaderboard(
   apiKey: string,
   primary: { target: string; brand: string },
   competitors: { target: string; brand: string }[],
-  source: string
+  source: string,
 ): Promise<LeaderboardEntry[]> {
-  const res = await fetchWithRetry(`${BASE_URL}/ai-search/overview/leaderboard`, {
-    method: "POST",
-    headers: authHeaders(apiKey),
-    body: JSON.stringify({
-      primary,
-      competitors,
-      source: source.toLowerCase(),
-      engines: [...ENGINES],
-      scope: "base_domain",
-    }),
-    cache: "no-store",
-  });
-  if (!res.ok) await handleError(res);
+  // Fire all 5 engine calls in parallel. Each has a 12 s hard timeout and
+  // never retries. Total wall-clock time = max of the 5 calls (~6–12 s),
+  // not their sum — this is the fix for Vercel's 60 s function limit.
+  const settled = await Promise.allSettled(
+    ENGINES.map(engine => fetchLeaderboardForEngine(apiKey, primary, competitors, source, engine))
+  );
 
-  const data = await res.json() as {
-    results: Record<string, Record<string, { brand_presence: number; link_presence: number }>>;
-    leaderboard: Array<{ domain: string; share_of_voice: number; rank: number }>;
-  };
+  const results: Record<string, Record<string, { brand_presence?: number | null; link_presence?: number | null }>> = {};
+  let rankSource: Array<{ domain: string; rank?: number }> = [];
+  let succeeded = 0;
+
+  for (const result of settled) {
+    if (result.status !== "fulfilled" || !result.value.ok) continue;
+    succeeded++;
+    const { results: r, leaderboard: lb } = result.value;
+    for (const [domain, perEngine] of Object.entries(r)) {
+      results[domain] ??= {};
+      for (const [eng, vals] of Object.entries(perEngine)) {
+        results[domain][eng] = vals;
+      }
+    }
+    if (rankSource.length === 0 && lb.length > 0) rankSource = lb;
+  }
+
+  if (succeeded === 0) {
+    throw new Error(
+      "SE Ranking's leaderboard API timed out on all 5 engines. " +
+      "This is usually transient — please wait a moment and try again."
+    );
+  }
 
   // Build domain → brand map from what we passed in
-  const domainToBrand: Record<string, string> = {
-    [primary.target]: primary.brand,
-    ...Object.fromEntries(competitors.map((c) => [c.target, c.brand])),
-  };
+  const allDomains = [primary, ...competitors];
+  const domainToBrand: Record<string, string> = Object.fromEntries(
+    allDomains.map((d) => [d.target, d.brand])
+  );
 
-  // For each engine, sum brand_presence across all queried domains.
-  // This is the denominator for per-engine relative SOV among the queried brands.
-  // When total = 0 for an engine, no queried brand has any citations there —
-  // sov stays 0 and the UI shows "—" rather than "0%".
+  // Rank by leaderboard order when available; fall back to input order
+  const ranked: string[] = rankSource.length > 0
+    ? [...rankSource]
+        .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0))
+        .map((e) => e.domain)
+        .filter((d) => domainToBrand[d])
+    : allDomains.map((d) => d.target);
+
+  // Per-engine totals across all queried domains (denominator for relative SOV)
   const engineTotals: Partial<Record<Engine, number>> = {};
   for (const engine of ENGINES) {
-    engineTotals[engine] = Object.values(data.results ?? {}).reduce(
+    engineTotals[engine] = Object.values(results).reduce(
       (sum, domainData) => sum + (domainData[engine]?.brand_presence ?? 0),
       0
     );
   }
 
-  // Sort by leaderboard rank
-  const ranked = [...(data.leaderboard ?? [])].sort((a, b) => a.rank - b.rank);
-
-  return ranked.map(({ domain }) => {
-    const domainData = (data.results ?? {})[domain] ?? {};
+  return ranked.map((domain) => {
+    const domainData = results[domain] ?? {};
     const sov: EngineSOV = { chatgpt: 0, perplexity: 0, gemini: 0, ai_overview: 0, ai_mode: 0 };
 
     for (const engine of ENGINES) {
       const presence = domainData[engine]?.brand_presence ?? 0;
       const total    = engineTotals[engine] ?? 0;
-      // SOV is relative share among queried brands. When total is 0, no brand in
-      // the comparison set has any citations for this engine — leave as 0 so the
-      // UI can distinguish "no data" from a genuine zero.
+      // When total is 0, no brand in the set has citations for this engine —
+      // leave SOV as 0 so the UI can distinguish "no data" from a genuine zero.
       sov[ENGINE_KEY_MAP[engine]] = total > 0 ? Math.round((presence / total) * 100) : 0;
     }
 
@@ -345,13 +444,14 @@ async function fetchOneEngine(
   apiKey: string,
   brand: string,
   source: string,
-  engine: Engine
+  engine: Engine,
+  limit: number
 ): Promise<Array<{ prompt: string; volume: number; type: string; answer: string }>> {
   const url = new URL(`${BASE_URL}/ai-search/prompts-by-brand`);
   url.searchParams.set("brand", brand);
   url.searchParams.set("source", source.toLowerCase());
   url.searchParams.set("engine", engine);
-  url.searchParams.set("limit", "50");
+  url.searchParams.set("limit", String(limit));
   url.searchParams.set("sort", "volume");
   url.searchParams.set("sort_order", "desc");
 
@@ -374,17 +474,6 @@ async function fetchOneEngine(
   }));
 }
 
-// Extract a ~200-char window from `text` centered on the first occurrence of
-// `brand`. Falls back to the opening slice when the brand isn't found.
-function extractBrandSnippet(text: string, brand: string, windowSize = 220): string {
-  if (!text) return "";
-  const idx = text.toLowerCase().indexOf(brand.toLowerCase());
-  const start = idx === -1 ? 0 : Math.max(0, idx - 80);
-  const end   = Math.min(text.length, start + windowSize);
-  const snippet = text.slice(start, end);
-  return (start > 0 ? "…" : "") + snippet + (end < text.length ? "…" : "");
-}
-
 // Fetches prompts for all engines sequentially (one request at a time) to
 // avoid hitting SE Ranking's rate limit. Each engine call is separated by
 // `delayMs` milliseconds.
@@ -392,24 +481,29 @@ export async function fetchPromptsByBrand(
   apiKey: string,
   brand: string,
   source: string,
-  delayMs = 600
+  delayMs = 300,
+  limitPerEngine = 50,
+  topicFilter = ""
 ): Promise<{ positive: PromptEntry[]; neutral: PromptEntry[]; negative: PromptEntry[] }> {
   const classified = {
     positive: [] as PromptEntry[],
     neutral:  [] as PromptEntry[],
     negative: [] as PromptEntry[],
   };
-  const seen = new Set<string>();
+  const seen  = new Set<string>();
+  const topic = topicFilter.trim().toLowerCase();
 
   for (let i = 0; i < ENGINES.length; i++) {
     if (i > 0) await sleepMs(delayMs);
-    const items = await fetchOneEngine(apiKey, brand, source, ENGINES[i]);
+    const items = await fetchOneEngine(apiKey, brand, source, ENGINES[i], limitPerEngine);
     for (const item of items) {
       const q = item.prompt?.trim();
       if (!q || seen.has(q)) continue;
+      // Apply topic filter before storing — skip prompts that don't match
+      if (topic && !q.toLowerCase().includes(topic)) continue;
       seen.add(q);
       const sentiment = classifyResponse(item.answer, brand);
-      classified[sentiment].push({ prompt: q, answer: extractBrandSnippet(item.answer, brand) });
+      classified[sentiment].push({ prompt: q, answer: item.answer });
     }
   }
 

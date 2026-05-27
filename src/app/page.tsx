@@ -126,6 +126,10 @@ function SOVTable({ brands }: { brands: OverviewBrand[] }) {
       engineHasData[eng] = max > 0;
     }
   }
+
+  // True when every cell in the table is "—" — all engines returned zero data.
+  const noDataAtAll = brands.length > 0 && ENGINES.every((e) => !engineHasData[e]);
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
@@ -163,17 +167,63 @@ function SOVTable({ brands }: { brands: OverviewBrand[] }) {
           ))}
         </tbody>
       </table>
+      {noDataAtAll && (
+        <div className="mt-4 px-4 py-3 bg-surface border border-border rounded text-xs text-muted leading-relaxed">
+          <span className="text-text font-semibold">No AI citation data found for these domains.</span>{" "}
+          SE Ranking's AI search index covers brands that appear in AI-generated answers (ChatGPT, Perplexity, Gemini, etc.).
+          Local or niche businesses are rarely cited by AI engines — try using the national brand name (e.g.{" "}
+          <span className="text-purple-bright">volvocars.com</span> instead of a local dealership domain) to see citation data.
+        </div>
+      )}
     </div>
   );
 }
 
 // ─── Trust Exposure table ─────────────────────────────────────────────────────
 
+function InfoTooltip({ text }: { text: string }) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <span className="relative inline-block align-middle ml-1">
+      <span
+        className="cursor-help select-none text-muted opacity-40 hover:opacity-80 transition-opacity"
+        onMouseEnter={() => setVisible(true)}
+        onMouseLeave={() => setVisible(false)}
+      >
+        ⓘ
+      </span>
+      {visible && (
+        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 bg-[#2a2540] border border-border-bright rounded px-3 py-2.5 text-xs text-[#e8e0d4] leading-relaxed z-50 shadow-xl normal-case tracking-normal text-left whitespace-normal pointer-events-none">
+          {text}
+          {/* arrow */}
+          <span className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-border-bright" />
+        </div>
+      )}
+    </span>
+  );
+}
+
 const TRUST_COLS = [
-  { key: "visibility",         label: "Visibility"              },
-  { key: "negativeQueryShare", label: "Neg. Query\n(Inverted)"  },
-  { key: "reviewRisk",         label: "Review Risk\n(Inverted)" },
-  { key: "persuasionStrength", label: "Persuasion"              },
+  {
+    key:   "visibility",
+    label: "Visibility",
+    info:  "Your brand's average Share of Voice across all five AI engines relative to the strongest brand in the comparison set. A score of 100 means your brand has the highest average SOV; 50 means half the leader's SOV.",
+  },
+  {
+    key:   "negativeQueryShare",
+    label: "Neg. Query\n(Inverted)",
+    info:  "The proportion of AI responses about your brand that are classified as negative — criticism, lawsuits, recalls, complaints. Inverted so higher is better: 100 = no negative responses, 60 = 40% of responses are negative.",
+  },
+  {
+    key:   "reviewRisk",
+    label: "Review Risk\n(Inverted)",
+    info:  "The proportion of queries containing review or reliability risk language — e.g. 'complaints', 'defective', 'return', 'warranty claim'. Inverted so higher is better: 100 = no risk-signal queries found.",
+  },
+  {
+    key:   "persuasionStrength",
+    label: "Persuasion",
+    info:  "The proportion of queries showing commercial or purchase intent — e.g. 'best', 'buy', 'recommend', 'deal'. Not inverted: higher means more queries when people are actively ready to buy.",
+  },
 ] as const;
 
 interface MergedBrand extends OverviewBrand {
@@ -209,10 +259,15 @@ function TrustTable({ brands }: { brands: MergedBrand[] }) {
             <th className="text-left py-2 pr-4 font-normal w-28">Brand</th>
             {TRUST_COLS.map((c) => (
               <th key={c.key} className="text-center py-2 px-3 font-normal leading-tight whitespace-pre-line">
-                {c.label}
+                <span className="inline-flex items-center justify-center gap-0.5 whitespace-pre-line">{c.label}<InfoTooltip text={c.info} /></span>
               </th>
             ))}
-            <th className="text-center py-2 px-3 font-normal">Trust Score</th>
+            <th className="text-center py-2 px-3 font-normal">
+              <span className="inline-flex items-center justify-center gap-0.5">
+                Trust Score
+                <InfoTooltip text="Unweighted average of all four signals (Visibility + Neg. Query Share + Review Risk + Persuasion) ÷ 4. Ranges 0–100. 70–100 = strong position; 45–69 = mixed signals; 0–44 = needs attention." />
+              </span>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -245,13 +300,75 @@ function TrustTable({ brands }: { brands: MergedBrand[] }) {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
+// Extract a display snippet centered on the brand mention (~220 chars).
+// The full answer is preserved in entry.answer for CSV export.
+function displaySnippet(text: string, brand: string, windowSize = 220): string {
+  if (!text) return "";
+  const idx   = text.toLowerCase().indexOf(brand.toLowerCase());
+  const start = idx === -1 ? 0 : Math.max(0, idx - 80);
+  const end   = Math.min(text.length, start + windowSize);
+  return (start > 0 ? "…" : "") + text.slice(start, end) + (end < text.length ? "…" : "");
+}
+
+// ─── Topic-filtered SOV ──────────────────────────────────────────────────────
+// Computes relative brand presence from the already-fetched (and topic-filtered)
+// prompt data. Shown in the Overview tab when a topic filter is active, giving
+// users "of all [topic] AI queries, what % cite each brand?"
+
+function TopicSOVSection({ brands, topic }: { brands: PromptsBrand[]; topic: string }) {
+  const rows = brands
+    .map((b) => ({
+      brand: b.brand,
+      total: b.prompts.positive.length + b.prompts.neutral.length + b.prompts.negative.length,
+    }))
+    .sort((a, b) => b.total - a.total);
+
+  const grandTotal = rows.reduce((s, r) => s + r.total, 0);
+  if (grandTotal === 0) {
+    return (
+      <p className="text-muted text-xs italic">
+        No prompts matched &ldquo;{topic}&rdquo; for any brand.
+      </p>
+    );
+  }
+
+  const maxCount = rows[0].total;
+
+  return (
+    <div className="space-y-3">
+      {rows.map(({ brand, total }) => {
+        const pct = Math.round((total / grandTotal) * 100);
+        const barPct = maxCount > 0 ? Math.round((total / maxCount) * 100) : 0;
+        return (
+          <div key={brand} className="flex items-center gap-3">
+            <span className="text-xs font-semibold text-purple-bright w-28 truncate">{brand}</span>
+            <div className="flex-1 h-2 bg-highlight rounded overflow-hidden">
+              <div
+                className="h-full rounded"
+                style={{ width: `${barPct}%`, backgroundColor: "#9B8FD4" }}
+              />
+            </div>
+            <span className="text-xs tabular-nums text-text w-8 text-right font-semibold">{pct}%</span>
+            <span className="text-xs text-muted opacity-60">({total} prompts)</span>
+          </div>
+        );
+      })}
+      <p className="text-muted text-xs mt-1 opacity-60">
+        Based on {grandTotal} prompt{grandTotal !== 1 ? "s" : ""} matching &ldquo;{topic}&rdquo; across all brands.
+        {brands.length < 3 && " More brands may load shortly."}
+      </p>
+    </div>
+  );
+}
+
 function HighlightBrand({ text, brand }: { text: string; brand: string }) {
   if (!text) return <span className="italic opacity-50">No response text available.</span>;
   const brandPresent = brand && text.toLowerCase().includes(brand.toLowerCase());
+  const snippet = displaySnippet(text, brand);
   if (!brandPresent) {
     return (
       <>
-        {text}
+        {snippet}
         <span className="ml-1.5 text-[10px] bg-surface border border-border rounded px-1.5 py-0.5 opacity-60 not-italic">
           {brand} not mentioned
         </span>
@@ -259,7 +376,7 @@ function HighlightBrand({ text, brand }: { text: string; brand: string }) {
     );
   }
   const escaped = brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const parts = text.split(new RegExp(`(${escaped})`, "gi"));
+  const parts = snippet.split(new RegExp(`(${escaped})`, "gi"));
   const lower = brand.toLowerCase();
   return (
     <>
@@ -273,7 +390,7 @@ function HighlightBrand({ text, brand }: { text: string; brand: string }) {
 }
 
 function exportCSV(brands: PromptsBrand[]) {
-  const header = ["Brand", "Bucket", "Prompt", "AI Response Snippet"];
+  const header = ["Brand", "Bucket", "Prompt", "AI Response"];
   const rows: string[][] = [header];
   for (const b of brands) {
     for (const bucket of ["positive", "neutral", "negative"] as const) {
@@ -453,11 +570,12 @@ function cleanDomain(raw: string): string {
 }
 
 export default function HomePage() {
-  const [apiKey, setApiKey]       = useState("");
-  const [country, setCountry]     = useState("US");
-  const [targetDomain, setTarget] = useState("");
-  const [competitor1, setComp1]   = useState("");
-  const [competitor2, setComp2]   = useState("");
+  const [apiKey, setApiKey]         = useState("");
+  const [country, setCountry]       = useState("US");
+  const [targetDomain, setTarget]   = useState("");
+  const [competitor1, setComp1]     = useState("");
+  const [competitor2, setComp2]     = useState("");
+  const [topicFilter, setTopic]     = useState("");
 
   const [running, setRunning]           = useState(false);
   const [steps, setSteps]               = useState<Step[]>([]);
@@ -512,17 +630,21 @@ export default function HomePage() {
 
         for (const brand of (data.brands as OverviewBrand[]).map((b) => b.brand)) {
           const pi = pushStep(`Loading demo prompts for ${brand}…`);
-          const pr = await fetch("/api/prompts", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ brands: [brand] }),
-          });
-          const pd = await pr.json();
-          if (pr.ok && pd.brands?.[0]) {
-            setPromptsBrands((prev) => [...prev, pd.brands[0]]);
-            resolveStep(pi, `Demo prompts loaded — ${brand}`);
-          } else {
-            failStep(pi, `Could not load demo prompts for ${brand}`);
+          try {
+            const pr = await fetch("/api/prompts", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ brands: [brand] }),
+            });
+            const pd = await pr.json();
+            if (pr.ok && pd.brands?.[0]) {
+              setPromptsBrands((prev) => [...prev, pd.brands[0]]);
+              resolveStep(pi, `Demo prompts loaded — ${brand}`);
+            } else {
+              failStep(pi, `Could not load demo prompts for ${brand}`);
+            }
+          } catch {
+            failStep(pi, `Network error loading prompts for ${brand}`);
           }
         }
       } else {
@@ -558,22 +680,27 @@ export default function HomePage() {
         resolveStep(li, "Leaderboard loaded");
         setOverview(lbData);
 
-        // Step 3: Prompts per brand (sequential, client-controlled delay)
+        // Step 3: Prompts per brand — each in its own try/catch so a single
+        // brand failure (network drop, SE Ranking timeout) doesn't abort the rest.
         for (let i = 0; i < discovered.length; i++) {
           const { brand } = discovered[i];
           if (i > 0) await new Promise<void>((r) => setTimeout(r, 600));
           const pi = pushStep(`Loading prompts for ${brand}…`);
-          const pr = await fetch("/api/prompts", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ apiKey: trimmedKey, country, brands: [brand] }),
-          });
-          const pd = await pr.json();
-          if (pr.ok && pd.brands?.[0]) {
-            setPromptsBrands((prev) => [...prev, pd.brands[0]]);
-            resolveStep(pi, `Prompts loaded — ${brand}`);
-          } else {
-            failStep(pi, `Could not load prompts for ${brand}: ${pd.error ?? "unknown error"}`);
+          try {
+            const pr = await fetch("/api/prompts", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ apiKey: trimmedKey, country, brands: [brand], topicFilter: topicFilter.trim() }),
+            });
+            const pd = await pr.json();
+            if (pr.ok && pd.brands?.[0]) {
+              setPromptsBrands((prev) => [...prev, pd.brands[0]]);
+              resolveStep(pi, `Prompts loaded — ${brand}`);
+            } else {
+              failStep(pi, `Could not load prompts for ${brand}: ${pd.error ?? "unknown error"}`);
+            }
+          } catch {
+            failStep(pi, `Network error loading prompts for ${brand} — try again`);
           }
         }
       }
@@ -583,10 +710,10 @@ export default function HomePage() {
     } finally {
       setRunning(false);
     }
-  }, [apiKey, country, targetDomain, competitor1, competitor2]);
+  }, [apiKey, country, targetDomain, competitor1, competitor2, topicFilter]);
 
   const clear = useCallback(() => {
-    setApiKey(""); setCountry("US"); setTarget(""); setComp1(""); setComp2("");
+    setApiKey(""); setCountry("US"); setTarget(""); setComp1(""); setComp2(""); setTopic("");
     setOverview(null); setPromptsBrands([]); setError(null); setSteps([]);
     setActiveTab("overview");
   }, []);
@@ -658,6 +785,15 @@ export default function HomePage() {
                 value={competitor2} onChange={(e) => setComp2(e.target.value)}
                 maxLength={120}
                 className="w-full bg-input border border-border rounded px-4 py-2.5 text-sm text-text placeholder-muted focus:outline-none focus:border-border-bright transition-colors" />
+            </div>
+
+            <div>
+              <Label>Topic / product filter (optional)</Label>
+              <input type="text" placeholder="e.g. SUV, lease, service"
+                value={topicFilter} onChange={(e) => setTopic(e.target.value)}
+                maxLength={80}
+                className="w-full bg-input border border-border rounded px-4 py-2.5 text-sm text-text placeholder-muted focus:outline-none focus:border-border-bright transition-colors" />
+              <p className="text-muted text-xs mt-1">Only prompts containing this keyword will be fetched and stored.</p>
             </div>
           </div>
 
@@ -760,6 +896,19 @@ export default function HomePage() {
                   <SOVTable brands={overviewResult.brands} />
                 </div>
               </div>
+
+              {/* Topic-filtered SOV — only shown when a topic filter is active */}
+              {topicFilter.trim() && promptsBrands.length > 0 && (
+                <div>
+                  <SectionTitle>
+                    Topic SOV — &ldquo;{topicFilter.trim()}&rdquo; (brand share of matching prompts)
+                  </SectionTitle>
+                  <div className="bg-surface border border-border rounded-lg p-5 mt-3">
+                    <TopicSOVSection brands={promptsBrands} topic={topicFilter.trim()} />
+                  </div>
+                </div>
+              )}
+
               <div>
                 <SectionTitle>Trust Exposure Score (unweighted average of four signals, 0 to 100)</SectionTitle>
                 <div className="bg-surface border border-border rounded-lg p-5 mt-3">
