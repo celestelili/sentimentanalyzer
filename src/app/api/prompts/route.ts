@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchPromptsByBrand, scorePrompts, type PromptEntry } from "@/lib/seranking";
 import { MOCK_PROMPTS } from "@/lib/mockData";
 
+// Allow up to 60 s on Vercel — fetching prompts across 5 engines per brand
+// can take 20–40 s depending on SE Ranking response times.
+export const maxDuration = 60;
+
 const API_KEY_RE = /^[A-Za-z0-9_\-]{10,200}$/;
 
 function validateApiKey(raw: unknown): string | null {

@@ -523,17 +523,21 @@ export default function HomePage() {
 
         for (const brand of (data.brands as OverviewBrand[]).map((b) => b.brand)) {
           const pi = pushStep(`Loading demo prompts for ${brand}…`);
-          const pr = await fetch("/api/prompts", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ brands: [brand] }),
-          });
-          const pd = await pr.json();
-          if (pr.ok && pd.brands?.[0]) {
-            setPromptsBrands((prev) => [...prev, pd.brands[0]]);
-            resolveStep(pi, `Demo prompts loaded — ${brand}`);
-          } else {
-            failStep(pi, `Could not load demo prompts for ${brand}`);
+          try {
+            const pr = await fetch("/api/prompts", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ brands: [brand] }),
+            });
+            const pd = await pr.json();
+            if (pr.ok && pd.brands?.[0]) {
+              setPromptsBrands((prev) => [...prev, pd.brands[0]]);
+              resolveStep(pi, `Demo prompts loaded — ${brand}`);
+            } else {
+              failStep(pi, `Could not load demo prompts for ${brand}`);
+            }
+          } catch {
+            failStep(pi, `Network error loading prompts for ${brand}`);
           }
         }
       } else {
@@ -569,22 +573,27 @@ export default function HomePage() {
         resolveStep(li, "Leaderboard loaded");
         setOverview(lbData);
 
-        // Step 3: Prompts per brand (sequential, client-controlled delay)
+        // Step 3: Prompts per brand — each in its own try/catch so a single
+        // brand failure (network drop, SE Ranking timeout) doesn't abort the rest.
         for (let i = 0; i < discovered.length; i++) {
           const { brand } = discovered[i];
           if (i > 0) await new Promise<void>((r) => setTimeout(r, 600));
           const pi = pushStep(`Loading prompts for ${brand}…`);
-          const pr = await fetch("/api/prompts", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ apiKey: trimmedKey, country, brands: [brand] }),
-          });
-          const pd = await pr.json();
-          if (pr.ok && pd.brands?.[0]) {
-            setPromptsBrands((prev) => [...prev, pd.brands[0]]);
-            resolveStep(pi, `Prompts loaded — ${brand}`);
-          } else {
-            failStep(pi, `Could not load prompts for ${brand}: ${pd.error ?? "unknown error"}`);
+          try {
+            const pr = await fetch("/api/prompts", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ apiKey: trimmedKey, country, brands: [brand] }),
+            });
+            const pd = await pr.json();
+            if (pr.ok && pd.brands?.[0]) {
+              setPromptsBrands((prev) => [...prev, pd.brands[0]]);
+              resolveStep(pi, `Prompts loaded — ${brand}`);
+            } else {
+              failStep(pi, `Could not load prompts for ${brand}: ${pd.error ?? "unknown error"}`);
+            }
+          } catch {
+            failStep(pi, `Network error loading prompts for ${brand} — try again`);
           }
         }
       }

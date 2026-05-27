@@ -3,6 +3,10 @@ import { fetchLeaderboard, visibilityScore, type EngineSOV, type LeaderboardEntr
 import { MOCK_LEADERBOARD } from "@/lib/mockData";
 import { SUPPORTED_COUNTRIES } from "@/lib/countries";
 
+// Allow up to 60 s on Vercel — the leaderboard POST can be slow when SE
+// Ranking's gateway is under load (504s are retried with backoff).
+export const maxDuration = 60;
+
 const API_KEY_RE = /^[A-Za-z0-9_\-]{10,200}$/;
 
 function validateApiKey(raw: unknown): string | null {

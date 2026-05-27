@@ -390,7 +390,7 @@ export async function fetchPromptsByBrand(
   apiKey: string,
   brand: string,
   source: string,
-  delayMs = 600
+  delayMs = 300
 ): Promise<{ positive: PromptEntry[]; neutral: PromptEntry[]; negative: PromptEntry[] }> {
   const classified = {
     positive: [] as PromptEntry[],
