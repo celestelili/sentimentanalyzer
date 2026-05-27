@@ -313,8 +313,11 @@ export async function discoverBrand(
 // }
 //
 // Calls the endpoint once per engine sequentially (with `delayMs` between
-// calls) instead of asking for all 5 at once — a single-engine request
-// returns in 3–6 s where the 5-engine version often takes 20+ s and 504s.
+// calls) instead of asking for all 5 at once. Each call has a hard 8 s cap
+// and never retries — if an engine 504s, we just skip it and continue.
+// Total worst-case wall-clock: 5 × 8 s + 4 × 0.6 s ≈ 42 s (within Vercel's 60 s).
+//
+// Never throws — failures are reported via the returned `failed` array.
 async function fetchLeaderboardForEngine(
   apiKey: string,
   primary: { target: string; brand: string },
@@ -322,33 +325,38 @@ async function fetchLeaderboardForEngine(
   source: string,
   engine: Engine
 ): Promise<{
+  ok: boolean;
   results: Record<string, Record<string, { brand_presence?: number | null; link_presence?: number | null }>>;
   leaderboard: Array<{ domain: string; share_of_voice?: number; rank?: number; brand_presence?: number }>;
 }> {
-  const res = await fetchWithRetry(
-    `${BASE_URL}/ai-search/overview/leaderboard`,
-    {
-      method: "POST",
-      headers: authHeaders(apiKey),
-      body: JSON.stringify({
-        primary,
-        competitors,
-        source: source.toLowerCase(),
-        engines: [engine],
-        scope: "base_domain",
-      }),
-      cache: "no-store",
-    },
-    /* retries    */ 1,
-    /* firstDelay */ 2000,
-    /* timeoutMs  */ 12000
-  );
-  if (!res.ok) return { results: {}, leaderboard: [] };
-  const data = await res.json() as {
-    results?: Record<string, Record<string, { brand_presence?: number | null; link_presence?: number | null }>>;
-    leaderboard?: Array<{ domain: string; share_of_voice?: number; rank?: number; brand_presence?: number }>;
-  };
-  return { results: data.results ?? {}, leaderboard: data.leaderboard ?? [] };
+  try {
+    const res = await fetchWithRetry(
+      `${BASE_URL}/ai-search/overview/leaderboard`,
+      {
+        method: "POST",
+        headers: authHeaders(apiKey),
+        body: JSON.stringify({
+          primary,
+          competitors,
+          source: source.toLowerCase(),
+          engines: [engine],
+          scope: "base_domain",
+        }),
+        cache: "no-store",
+      },
+      /* retries    */ 0,
+      /* firstDelay */ 0,
+      /* timeoutMs  */ 8000
+    );
+    if (!res.ok) return { ok: false, results: {}, leaderboard: [] };
+    const data = await res.json() as {
+      results?: Record<string, Record<string, { brand_presence?: number | null; link_presence?: number | null }>>;
+      leaderboard?: Array<{ domain: string; share_of_voice?: number; rank?: number; brand_presence?: number }>;
+    };
+    return { ok: true, results: data.results ?? {}, leaderboard: data.leaderboard ?? [] };
+  } catch {
+    return { ok: false, results: {}, leaderboard: [] };
+  }
 }
 
 // Per-engine SOV = (domain_brand_presence / sum_of_brand_presence_for_engine) * 100
@@ -359,17 +367,18 @@ export async function fetchLeaderboard(
   source: string,
   delayMs = 600
 ): Promise<LeaderboardEntry[]> {
-  // Merged results across all engines, keyed exactly like a multi-engine response.
   const results: Record<string, Record<string, { brand_presence?: number | null; link_presence?: number | null }>> = {};
-  // Use the leaderboard array from the first successful engine call for rank order.
   let rankSource: Array<{ domain: string; rank?: number }> = [];
+  let succeeded = 0;
 
   for (let i = 0; i < ENGINES.length; i++) {
     if (i > 0) await sleepMs(delayMs);
     const engine = ENGINES[i];
-    const { results: r, leaderboard: lb } = await fetchLeaderboardForEngine(
+    const { ok, results: r, leaderboard: lb } = await fetchLeaderboardForEngine(
       apiKey, primary, competitors, source, engine
     );
+    if (!ok) continue;
+    succeeded++;
     for (const [domain, perEngine] of Object.entries(r)) {
       results[domain] ??= {};
       for (const [eng, vals] of Object.entries(perEngine)) {
@@ -377,6 +386,15 @@ export async function fetchLeaderboard(
       }
     }
     if (rankSource.length === 0 && lb.length > 0) rankSource = lb;
+  }
+
+  // If every single engine call failed, surface a clear message rather than
+  // returning a silently empty SOV table.
+  if (succeeded === 0) {
+    throw new Error(
+      "SE Ranking's AI search API is temporarily slow (all 5 engine calls timed out). " +
+      "This usually clears within a minute — please try again."
+    );
   }
 
   // Build domain → brand map from what we passed in
