@@ -306,26 +306,25 @@ export async function discoverBrand(
 }
 
 // POST /ai-search/overview/leaderboard
-// Verified response (via MCP test):
+// Verified response shape:
 // {
-//   results: {
-//     "sony.com": { "perplexity": { brand_presence: 3356, link_presence: 109 },
-//                   "chatgpt":    { brand_presence: 95633, link_presence: 4 } },
-//     ...
-//   },
+//   results: { [domain]: { [engine]: { brand_presence, link_presence } } },
 //   leaderboard: [{ rank, domain, brand_presence, link_presence, share_of_voice, is_primary_target }]
 // }
 //
-// Per-engine SOV = (domain_brand_presence / sum_of_brand_presence_for_engine) * 100
-export async function fetchLeaderboard(
+// Calls the endpoint once per engine sequentially (with `delayMs` between
+// calls) instead of asking for all 5 at once — a single-engine request
+// returns in 3–6 s where the 5-engine version often takes 20+ s and 504s.
+async function fetchLeaderboardForEngine(
   apiKey: string,
   primary: { target: string; brand: string },
   competitors: { target: string; brand: string }[],
-  source: string
-): Promise<LeaderboardEntry[]> {
-  // The leaderboard endpoint can be slow under load. Use a 20 s per-attempt
-  // timeout and only 1 retry (2 attempts × 20 s + 2 s gap = 42 s) so we
-  // stay well inside Vercel's 60 s function limit.
+  source: string,
+  engine: Engine
+): Promise<{
+  results: Record<string, Record<string, { brand_presence?: number | null; link_presence?: number | null }>>;
+  leaderboard: Array<{ domain: string; share_of_voice?: number; rank?: number; brand_presence?: number }>;
+}> {
   const res = await fetchWithRetry(
     `${BASE_URL}/ai-search/overview/leaderboard`,
     {
@@ -335,21 +334,50 @@ export async function fetchLeaderboard(
         primary,
         competitors,
         source: source.toLowerCase(),
-        engines: [...ENGINES],
+        engines: [engine],
         scope: "base_domain",
       }),
       cache: "no-store",
     },
-    /* retries  */ 1,
+    /* retries    */ 1,
     /* firstDelay */ 2000,
-    /* timeoutMs  */ 20000
+    /* timeoutMs  */ 12000
   );
-  if (!res.ok) await handleError(res);
-
+  if (!res.ok) return { results: {}, leaderboard: [] };
   const data = await res.json() as {
     results?: Record<string, Record<string, { brand_presence?: number | null; link_presence?: number | null }>>;
     leaderboard?: Array<{ domain: string; share_of_voice?: number; rank?: number; brand_presence?: number }>;
   };
+  return { results: data.results ?? {}, leaderboard: data.leaderboard ?? [] };
+}
+
+// Per-engine SOV = (domain_brand_presence / sum_of_brand_presence_for_engine) * 100
+export async function fetchLeaderboard(
+  apiKey: string,
+  primary: { target: string; brand: string },
+  competitors: { target: string; brand: string }[],
+  source: string,
+  delayMs = 600
+): Promise<LeaderboardEntry[]> {
+  // Merged results across all engines, keyed exactly like a multi-engine response.
+  const results: Record<string, Record<string, { brand_presence?: number | null; link_presence?: number | null }>> = {};
+  // Use the leaderboard array from the first successful engine call for rank order.
+  let rankSource: Array<{ domain: string; rank?: number }> = [];
+
+  for (let i = 0; i < ENGINES.length; i++) {
+    if (i > 0) await sleepMs(delayMs);
+    const engine = ENGINES[i];
+    const { results: r, leaderboard: lb } = await fetchLeaderboardForEngine(
+      apiKey, primary, competitors, source, engine
+    );
+    for (const [domain, perEngine] of Object.entries(r)) {
+      results[domain] ??= {};
+      for (const [eng, vals] of Object.entries(perEngine)) {
+        results[domain][eng] = vals;
+      }
+    }
+    if (rankSource.length === 0 && lb.length > 0) rankSource = lb;
+  }
 
   // Build domain → brand map from what we passed in
   const allDomains = [primary, ...competitors];
@@ -357,19 +385,13 @@ export async function fetchLeaderboard(
     allDomains.map((d) => [d.target, d.brand])
   );
 
-  // Use leaderboard rank order when available; fall back to input order
-  const ranked: string[] = (() => {
-    const lb = data.leaderboard ?? [];
-    if (lb.length > 0) {
-      return [...lb]
+  // Rank by leaderboard order when available; fall back to input order
+  const ranked: string[] = rankSource.length > 0
+    ? [...rankSource]
         .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0))
         .map((e) => e.domain)
-        .filter((d) => domainToBrand[d]);
-    }
-    return allDomains.map((d) => d.target);
-  })();
-
-  const results = data.results ?? {};
+        .filter((d) => domainToBrand[d])
+    : allDomains.map((d) => d.target);
 
   // Per-engine totals across all queried domains (denominator for relative SOV)
   const engineTotals: Partial<Record<Engine, number>> = {};
