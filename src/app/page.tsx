@@ -891,8 +891,13 @@ export default function HomePage() {
           {activeTab === "overview" && (
             <div className="space-y-8">
               <div>
-                <SectionTitle>Share of Voice by AI Engine (% of citations per engine per brand)</SectionTitle>
+                <SectionTitle>Share of Voice by AI Engine (% of the leader&apos;s citations, per engine)</SectionTitle>
                 <div className="bg-surface border border-border rounded-lg p-5 mt-3">
+                  <p className="text-muted text-xs leading-relaxed mb-4">
+                    For each engine, the brand with the most citations is shown as 100% and the others as their share of the leader.
+                    This keeps each brand&apos;s number stable when you swap a weaker competitor in or out — only adding a stronger
+                    brand will move the existing numbers.
+                  </p>
                   <SOVTable brands={overviewResult.brands} />
                 </div>
               </div>
