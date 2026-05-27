@@ -224,15 +224,46 @@ async function handleError(res: Response): Promise<never> {
 }
 
 // Wraps fetch with up to `retries` automatic retries on transient errors
-// (rate limits and gateway timeouts). Waits 3 s → 6 s → 12 s between attempts.
+// (rate limits and gateway timeouts). Waits `firstDelay` ms between attempts,
+// doubling each time. An optional `timeoutMs` aborts each individual attempt
+// after that many milliseconds so callers can bound total wall-clock time.
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
-  retries = 3
+  retries = 3,
+  firstDelay = 3000,
+  timeoutMs?: number
 ): Promise<Response> {
-  let delay = 3000;
+  let delay = firstDelay;
+
   for (let attempt = 0; attempt <= retries; attempt++) {
-    const res = await fetch(url, init);
+    // Wire up a per-attempt AbortController when a timeout is requested.
+    let controller: AbortController | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (timeoutMs) {
+      controller = new AbortController();
+      timer = setTimeout(() => controller!.abort(), timeoutMs);
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(url, controller ? { ...init, signal: controller.signal } : init);
+    } catch (err) {
+      if (timer) clearTimeout(timer);
+      // AbortError means the per-attempt timeout fired — treat like a 504.
+      if (err instanceof Error && err.name === "AbortError") {
+        if (attempt === retries) {
+          throw new Error(
+            "SE Ranking request timed out. The leaderboard endpoint is slow right now — please try again in a moment."
+          );
+        }
+        await sleepMs(delay);
+        delay *= 2;
+        continue;
+      }
+      throw err;
+    }
+    if (timer) clearTimeout(timer);
 
     // Success or a definitive client error (4xx except 429) — return immediately.
     if (res.ok || (res.status >= 400 && res.status < 500 && res.status !== 429)) return res;
@@ -240,11 +271,11 @@ async function fetchWithRetry(
     // Peek at body to decide whether this error is worth retrying.
     const text = await res.text().catch(() => "");
     if (!isRetryable(res.status, text)) {
-      return new Response(text, { status: res.status, headers: res.headers });
+      return new Response(text, { status: res.status });
     }
 
     if (attempt === retries) {
-      return new Response(text, { status: res.status, headers: res.headers });
+      return new Response(text, { status: res.status });
     }
 
     await sleepMs(delay);
@@ -292,18 +323,27 @@ export async function fetchLeaderboard(
   competitors: { target: string; brand: string }[],
   source: string
 ): Promise<LeaderboardEntry[]> {
-  const res = await fetchWithRetry(`${BASE_URL}/ai-search/overview/leaderboard`, {
-    method: "POST",
-    headers: authHeaders(apiKey),
-    body: JSON.stringify({
-      primary,
-      competitors,
-      source: source.toLowerCase(),
-      engines: [...ENGINES],
-      scope: "base_domain",
-    }),
-    cache: "no-store",
-  });
+  // The leaderboard endpoint can be slow under load. Use a 20 s per-attempt
+  // timeout and only 1 retry (2 attempts × 20 s + 2 s gap = 42 s) so we
+  // stay well inside Vercel's 60 s function limit.
+  const res = await fetchWithRetry(
+    `${BASE_URL}/ai-search/overview/leaderboard`,
+    {
+      method: "POST",
+      headers: authHeaders(apiKey),
+      body: JSON.stringify({
+        primary,
+        competitors,
+        source: source.toLowerCase(),
+        engines: [...ENGINES],
+        scope: "base_domain",
+      }),
+      cache: "no-store",
+    },
+    /* retries  */ 1,
+    /* firstDelay */ 2000,
+    /* timeoutMs  */ 20000
+  );
   if (!res.ok) await handleError(res);
 
   const data = await res.json() as {
