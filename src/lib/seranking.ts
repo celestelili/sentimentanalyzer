@@ -359,7 +359,10 @@ async function fetchLeaderboardForEngine(
   }
 }
 
-// Per-engine SOV = (domain_brand_presence / sum_of_brand_presence_for_engine) * 100
+// Per-engine SOV = (domain_brand_presence / max_brand_presence_in_set_for_engine) * 100
+// Max-based (not sum-based) so each brand's number stays stable when weaker
+// competitors are swapped in or out — the leader is 100% and other brands
+// show their share of the leader's citations.
 export async function fetchLeaderboard(
   apiKey: string,
   primary: { target: string; brand: string },
@@ -417,11 +420,17 @@ export async function fetchLeaderboard(
   const missing = inputDomains.filter((d) => !rankedFromAPI.includes(d));
   const ranked = [...rankedFromAPI, ...missing];
 
-  // Per-engine totals across all queried domains (denominator for relative SOV)
-  const engineTotals: Partial<Record<Engine, number>> = {};
+  // Per-engine MAX brand_presence across all queried domains.
+  // We deliberately use max (not sum) so each brand's number is stable when
+  // weaker competitors are swapped in or out. Sum-based SOV causes every
+  // brand's % to shift whenever ANY competitor changes; max-based SOV only
+  // shifts when the leader itself changes, which is the meaningful event.
+  // The leader is always 100% and every other brand is shown as its share
+  // of the leader's citations.
+  const engineMax: Partial<Record<Engine, number>> = {};
   for (const engine of ENGINES) {
-    engineTotals[engine] = Object.values(results).reduce(
-      (sum, domainData) => sum + (domainData[engine]?.brand_presence ?? 0),
+    engineMax[engine] = Object.values(results).reduce(
+      (max, domainData) => Math.max(max, domainData[engine]?.brand_presence ?? 0),
       0
     );
   }
@@ -432,10 +441,10 @@ export async function fetchLeaderboard(
 
     for (const engine of ENGINES) {
       const presence = domainData[engine]?.brand_presence ?? 0;
-      const total    = engineTotals[engine] ?? 0;
-      // When total is 0, no brand in the set has citations for this engine —
+      const max      = engineMax[engine] ?? 0;
+      // max=0 means no brand in the set has citations for this engine —
       // leave SOV as 0 so the UI can distinguish "no data" from a genuine zero.
-      sov[ENGINE_KEY_MAP[engine]] = total > 0 ? Math.round((presence / total) * 100) : 0;
+      sov[ENGINE_KEY_MAP[engine]] = max > 0 ? Math.round((presence / max) * 100) : 0;
     }
 
     return { brand: domainToBrand[domain] ?? domain, sov };
@@ -465,9 +474,9 @@ async function fetchOneEngine(
     const res = await fetchWithRetry(
       url.toString(),
       { headers: authHeaders(apiKey), cache: "no-store" },
-      /* retries    */ 0,
-      /* firstDelay */ 0,
-      /* timeoutMs  */ 10000
+      /* retries    */ 1,
+      /* firstDelay */ 1000,
+      /* timeoutMs  */ 15000
     );
     if (!res.ok) return [];
 
