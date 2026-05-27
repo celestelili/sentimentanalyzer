@@ -354,13 +354,14 @@ async function fetchOneEngine(
   apiKey: string,
   brand: string,
   source: string,
-  engine: Engine
+  engine: Engine,
+  limit: number
 ): Promise<Array<{ prompt: string; volume: number; type: string; answer: string }>> {
   const url = new URL(`${BASE_URL}/ai-search/prompts-by-brand`);
   url.searchParams.set("brand", brand);
   url.searchParams.set("source", source.toLowerCase());
   url.searchParams.set("engine", engine);
-  url.searchParams.set("limit", "50");
+  url.searchParams.set("limit", String(limit));
   url.searchParams.set("sort", "volume");
   url.searchParams.set("sort_order", "desc");
 
@@ -390,7 +391,8 @@ export async function fetchPromptsByBrand(
   apiKey: string,
   brand: string,
   source: string,
-  delayMs = 300
+  delayMs = 300,
+  limitPerEngine = 10
 ): Promise<{ positive: PromptEntry[]; neutral: PromptEntry[]; negative: PromptEntry[] }> {
   const classified = {
     positive: [] as PromptEntry[],
@@ -401,7 +403,7 @@ export async function fetchPromptsByBrand(
 
   for (let i = 0; i < ENGINES.length; i++) {
     if (i > 0) await sleepMs(delayMs);
-    const items = await fetchOneEngine(apiKey, brand, source, ENGINES[i]);
+    const items = await fetchOneEngine(apiKey, brand, source, ENGINES[i], limitPerEngine);
     for (const item of items) {
       const q = item.prompt?.trim();
       if (!q || seen.has(q)) continue;

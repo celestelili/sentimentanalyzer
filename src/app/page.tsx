@@ -464,11 +464,12 @@ function cleanDomain(raw: string): string {
 }
 
 export default function HomePage() {
-  const [apiKey, setApiKey]       = useState("");
-  const [country, setCountry]     = useState("US");
-  const [targetDomain, setTarget] = useState("");
-  const [competitor1, setComp1]   = useState("");
-  const [competitor2, setComp2]   = useState("");
+  const [apiKey, setApiKey]             = useState("");
+  const [country, setCountry]           = useState("US");
+  const [targetDomain, setTarget]       = useState("");
+  const [competitor1, setComp1]         = useState("");
+  const [competitor2, setComp2]         = useState("");
+  const [promptLimit, setPromptLimit]   = useState(10);
 
   const [running, setRunning]           = useState(false);
   const [steps, setSteps]               = useState<Step[]>([]);
@@ -583,7 +584,7 @@ export default function HomePage() {
             const pr = await fetch("/api/prompts", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ apiKey: trimmedKey, country, brands: [brand] }),
+              body: JSON.stringify({ apiKey: trimmedKey, country, brands: [brand], limitPerEngine: promptLimit }),
             });
             const pd = await pr.json();
             if (pr.ok && pd.brands?.[0]) {
@@ -603,10 +604,10 @@ export default function HomePage() {
     } finally {
       setRunning(false);
     }
-  }, [apiKey, country, targetDomain, competitor1, competitor2]);
+  }, [apiKey, country, targetDomain, competitor1, competitor2, promptLimit]);
 
   const clear = useCallback(() => {
-    setApiKey(""); setCountry("US"); setTarget(""); setComp1(""); setComp2("");
+    setApiKey(""); setCountry("US"); setTarget(""); setComp1(""); setComp2(""); setPromptLimit(10);
     setOverview(null); setPromptsBrands([]); setError(null); setSteps([]);
     setActiveTab("overview");
   }, []);
@@ -678,6 +679,23 @@ export default function HomePage() {
                 value={competitor2} onChange={(e) => setComp2(e.target.value)}
                 maxLength={120}
                 className="w-full bg-input border border-border rounded px-4 py-2.5 text-sm text-text placeholder-muted focus:outline-none focus:border-border-bright transition-colors" />
+            </div>
+
+            <div>
+              <Label>Prompts per engine</Label>
+              <div className="flex rounded border border-border overflow-hidden text-sm" style={{ width: "fit-content" }}>
+                {([10, 20, 50] as const).map((n) => (
+                  <button key={n} type="button" onClick={() => setPromptLimit(n)}
+                    className={`px-4 py-2 transition-colors ${
+                      promptLimit === n ? "bg-highlight text-text" : "text-muted hover:text-text"
+                    }`}>
+                    {n}
+                  </button>
+                ))}
+              </div>
+              <p className="text-muted text-xs mt-1">
+                {promptLimit === 10 ? "Faster — less timeout risk" : promptLimit === 20 ? "Balanced" : "Most data — slower"}
+              </p>
             </div>
           </div>
 

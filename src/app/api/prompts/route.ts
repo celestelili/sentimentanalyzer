@@ -44,10 +44,13 @@ export async function POST(req: NextRequest) {
 
     // ── live mode — sequential across brands, parallel engines within each ─
     const source = (typeof body.country === "string" ? body.country : "us").toLowerCase();
+    const limitPerEngine = typeof body.limitPerEngine === "number"
+      ? Math.max(5, Math.min(50, Math.round(body.limitPerEngine)))
+      : 10;
     const result = [];
 
     for (const brand of brands) {
-      const prompts = await fetchPromptsByBrand(apiKey, brand, source);
+      const prompts = await fetchPromptsByBrand(apiKey, brand, source, 300, limitPerEngine);
       result.push({ brand, ...scorePrompts(prompts), prompts });
     }
 
