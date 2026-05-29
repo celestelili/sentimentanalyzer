@@ -257,7 +257,8 @@ async function fetchWithRetry(
             "SE Ranking request timed out. The leaderboard endpoint is slow right now — please try again in a moment."
           );
         }
-        await sleepMs(delay);
+        // Jitter prevents N concurrent callers from re-colliding on the same retry slot.
+        await sleepMs(delay + Math.floor(Math.random() * delay));
         delay *= 2;
         continue;
       }
@@ -278,7 +279,8 @@ async function fetchWithRetry(
       return new Response(text, { status: res.status });
     }
 
-    await sleepMs(delay);
+    // Jitter prevents N concurrent callers from re-colliding on the same retry slot.
+    await sleepMs(delay + Math.floor(Math.random() * delay));
     delay *= 2;
   }
   // unreachable
@@ -359,10 +361,7 @@ async function fetchLeaderboardForEngine(
   }
 }
 
-// Per-engine SOV = (domain_brand_presence / max_brand_presence_in_set_for_engine) * 100
-// Max-based (not sum-based) so each brand's number stays stable when weaker
-// competitors are swapped in or out — the leader is 100% and other brands
-// show their share of the leader's citations.
+// Per-engine SOV = (domain_brand_presence / sum_of_brand_presence_for_engine) * 100
 export async function fetchLeaderboard(
   apiKey: string,
   primary: { target: string; brand: string },
@@ -420,17 +419,11 @@ export async function fetchLeaderboard(
   const missing = inputDomains.filter((d) => !rankedFromAPI.includes(d));
   const ranked = [...rankedFromAPI, ...missing];
 
-  // Per-engine MAX brand_presence across all queried domains.
-  // We deliberately use max (not sum) so each brand's number is stable when
-  // weaker competitors are swapped in or out. Sum-based SOV causes every
-  // brand's % to shift whenever ANY competitor changes; max-based SOV only
-  // shifts when the leader itself changes, which is the meaningful event.
-  // The leader is always 100% and every other brand is shown as its share
-  // of the leader's citations.
-  const engineMax: Partial<Record<Engine, number>> = {};
+  // Per-engine totals across all queried domains (denominator for relative SOV)
+  const engineTotals: Partial<Record<Engine, number>> = {};
   for (const engine of ENGINES) {
-    engineMax[engine] = Object.values(results).reduce(
-      (max, domainData) => Math.max(max, domainData[engine]?.brand_presence ?? 0),
+    engineTotals[engine] = Object.values(results).reduce(
+      (sum, domainData) => sum + (domainData[engine]?.brand_presence ?? 0),
       0
     );
   }
@@ -441,10 +434,10 @@ export async function fetchLeaderboard(
 
     for (const engine of ENGINES) {
       const presence = domainData[engine]?.brand_presence ?? 0;
-      const max      = engineMax[engine] ?? 0;
-      // max=0 means no brand in the set has citations for this engine —
+      const total    = engineTotals[engine] ?? 0;
+      // When total is 0, no brand in the set has citations for this engine —
       // leave SOV as 0 so the UI can distinguish "no data" from a genuine zero.
-      sov[ENGINE_KEY_MAP[engine]] = max > 0 ? Math.round((presence / max) * 100) : 0;
+      sov[ENGINE_KEY_MAP[engine]] = total > 0 ? Math.round((presence / total) * 100) : 0;
     }
 
     return { brand: domainToBrand[domain] ?? domain, sov };
@@ -499,8 +492,10 @@ async function fetchOneEngine(
   }
 }
 
-// Fetches prompts for all 5 engines in parallel (each with a 10 s hard timeout
-// and no retries). Total wall-clock time ≈ slowest engine, not sum of all five.
+// Fetches prompts for all 5 engines mostly in parallel. Each engine's start
+// is staggered by 200 ms so they don't burst SE Ranking simultaneously, which
+// was causing rate-limited engines to drop and a brand's prompt count to
+// vary across runs. Total wall-clock ≈ 4×200ms + slowest engine (~16 s).
 export async function fetchPromptsByBrand(
   apiKey: string,
   brand: string,
@@ -512,7 +507,10 @@ export async function fetchPromptsByBrand(
   const topic = topicFilter.trim().toLowerCase();
 
   const allResults = await Promise.all(
-    ENGINES.map(engine => fetchOneEngine(apiKey, brand, source, engine, limitPerEngine))
+    ENGINES.map(async (engine, i) => {
+      if (i > 0) await sleepMs(200 * i);
+      return fetchOneEngine(apiKey, brand, source, engine, limitPerEngine);
+    })
   );
 
   const classified = {
