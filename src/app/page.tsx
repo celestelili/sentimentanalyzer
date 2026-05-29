@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import KawaiBucket from "@/components/KawaiBucket";
 import type { EngineSOV, PromptEntry } from "@/lib/seranking";
 import { SUPPORTED_COUNTRIES } from "@/lib/countries";
@@ -182,22 +183,35 @@ function SOVTable({ brands }: { brands: OverviewBrand[] }) {
 // ─── Trust Exposure table ─────────────────────────────────────────────────────
 
 function InfoTooltip({ text }: { text: string }) {
-  const [visible, setVisible] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const triggerRef = useRef<HTMLSpanElement>(null);
+
+  function show() {
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 6, left: rect.left + rect.width / 2 });
+    }
+  }
+
   return (
-    <span className="relative inline-block align-middle ml-1">
+    <span className="inline-block align-middle ml-1">
       <span
-        className="cursor-help select-none text-muted opacity-40 hover:opacity-80 transition-opacity"
-        onMouseEnter={() => setVisible(true)}
-        onMouseLeave={() => setVisible(false)}
+        ref={triggerRef}
+        className="cursor-help select-none text-[#4A3D8A] opacity-50 hover:opacity-90 transition-opacity"
+        onMouseEnter={show}
+        onMouseLeave={() => setPos(null)}
       >
         ⓘ
       </span>
-      {visible && (
-        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 bg-[#2a2540] border border-border-bright rounded px-3 py-2.5 text-xs text-[#e8e0d4] leading-relaxed z-50 shadow-xl normal-case tracking-normal text-left whitespace-normal pointer-events-none">
+      {pos && typeof document !== "undefined" && createPortal(
+        <div
+          style={{ position: "fixed", top: pos.top, left: pos.left, transform: "translateX(-50%)", zIndex: 9999 }}
+          className="w-60 bg-white border border-[#4A3D8A]/25 rounded-md px-3 py-2.5 text-xs text-[#4A3D8A] leading-relaxed shadow-lg pointer-events-none normal-case tracking-normal text-left whitespace-normal"
+        >
+          <span className="absolute bottom-full left-1/2 -translate-x-1/2 border-4 border-transparent border-b-white" />
           {text}
-          {/* arrow */}
-          <span className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-border-bright" />
-        </div>
+        </div>,
+        document.body
       )}
     </span>
   );
