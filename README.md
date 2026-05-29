@@ -11,6 +11,7 @@ When someone searches for your product category in an AI search engine, your bra
 - **How often** your brand is cited across each AI engine (Share of Voice)
 - **How the AI responds** about your brand — positive, neutral, or critical tone
 - **How exposed** your brand is to trust-damaging content in AI answers (Trust Exposure Score)
+- **Which topic-specific queries** drive brand visibility when you filter by product or service
 
 You can compare up to three domains side by side: your own site plus two competitors.
 
@@ -21,7 +22,8 @@ You can compare up to three domains side by side: your own site plus two competi
 1. Select the **country** where you want to measure AI search visibility. AI Overview and AI Mode are only available in select markets — choosing the right country avoids wasting API credits.
 2. Paste your **SE Ranking API key** (leave blank to run in demo mode with sample TV brand data).
 3. Enter your **target domain** and up to two **competitor domains** (e.g. `sony.com`, `samsung.com`, `lg.com`).
-4. Click **Run Analysis**.
+4. Optionally enter a **topic or product filter** (e.g. `OLED`, `lease`, `SUV`). When set, only prompts containing that keyword are fetched and counted — and a separate Topic SOV chart appears in the Overview tab showing each brand's share of those matching prompts.
+5. Click **Run Analysis**.
 
 The tool runs in stages and shows a live progress log as each step completes. The Overview tab appears as soon as leaderboard data is ready; trust scores and query lists fill in brand by brand as prompts are fetched.
 
@@ -41,9 +43,11 @@ engine_total = sum of brand_presence across all tracked domains for that engine
 domain_SOV   = (domain_brand_presence / engine_total) × 100
 ```
 
-The result is a percentage (0–100). A score of 40% means 40% of all brand citations in that engine belong to your brand. The highest-scoring brand per engine is highlighted in the table.
+The result is a percentage (0–100). A score of 40% means 40% of all brand citations in that engine belong to your brand among the brands you are tracking. The highest-scoring brand per engine is highlighted in the table.
 
-When SE Ranking returns no citation data for an engine, the cell shows `—` rather than `0%` to distinguish genuine zero-share from missing data.
+**Important:** because the denominator is the sum of the queried brands' citations, SOV percentages shift when you change which competitors are in the comparison set. This is intentional — if you add a brand with higher presence, existing brands' shares go down. SOV measures relative position within the comparison, not an absolute market share figure.
+
+When SE Ranking returns no citation data for an engine, the cell shows `—` rather than `0%` to distinguish genuine zero-share from missing data. If all cells in the table show `—`, a notice is displayed explaining that SE Ranking's AI index may not yet cover those domains — national brand domains (e.g. `samsung.com`) are more likely to have data than local or niche sites.
 
 **Engines tracked:**
 | Engine | What it covers |
@@ -56,9 +60,24 @@ When SE Ranking returns no citation data for an engine, the cell shows `—` rat
 
 ---
 
+### Topic Share of Voice
+
+When a topic or product filter is active, a second SOV chart appears below the main SOV table in the Overview tab. It shows each brand's **share of prompts matching the keyword** — i.e., of all AI queries containing your topic that mention any of the tracked brands, what percentage mention each brand?
+
+```
+topic_total = sum of matching prompts across all brands
+brand_topic_SOV = (brand_matching_prompts / topic_total) × 100
+```
+
+This is computed client-side from the already-fetched prompt data and updates in real time as each brand's prompts load. It answers the question: "When AI users ask about [topic], which brands come up most?"
+
+---
+
 ### Trust Exposure Score
 
 The Trust Exposure Score is a single 0–100 number that summarises how well-positioned your brand is in the AI search landscape from a trust and intent perspective. It is the **unweighted average of four signals**, each scored 0–100.
+
+Each column header in the Trust Exposure table has an **ⓘ tooltip** — hover it to read a plain-language explanation of how that signal is calculated.
 
 Higher is always better. A score of 100 means maximum positive visibility with no trust risk exposure.
 
@@ -174,6 +193,25 @@ Click **Export CSV ↓** in the tab bar to download all visible prompt data as a
 
 ---
 
+## Topic / Product Filter
+
+The optional **Topic / product filter** input (on the main panel, before running) lets you scope the entire prompt analysis to a specific keyword.
+
+**What it does:**
+- Only prompts whose text contains the keyword are fetched and counted
+- The Query Intelligence tab shows only matching prompts
+- A **Topic SOV chart** appears in the Overview tab showing each brand's share of matching prompts
+- Trust scores reflect only the filtered prompt set
+
+**When to use it:**
+- You sell multiple product lines and want to isolate one (e.g. `OLED` vs `QLED` for a TV brand)
+- You want to understand AI visibility for a specific service type (e.g. `lease`, `repair`, `catering`)
+- You want to filter out irrelevant queries that mention your brand in unrelated contexts
+
+Leave the field blank to fetch all prompts with no filtering (default).
+
+---
+
 ## Supported Countries
 
 AI Overview and AI Mode data is only available where Google has launched these features. The tool limits country selection to:
@@ -227,7 +265,7 @@ If you leave the API key field blank, the tool runs entirely on mock data — no
 - **Language:** TypeScript (strict mode)
 - **Styling:** Tailwind CSS
 - **Data:** SE Ranking AI Search API v1
-- **Deployment:** Vercel
+- **Deployment:** Vercel (60 s function timeout)
 
 **Security headers applied to all routes:**
 - `Content-Security-Policy` — restricts script/style/connect sources
@@ -239,16 +277,30 @@ If you leave the API key field blank, the tool runs entirely on mock data — no
 
 ---
 
-## Rate Limiting
+## API Performance and Reliability
 
-SE Ranking's AI Search endpoints have per-second rate limits. The tool handles this by:
+SE Ranking's AI Search endpoints can be slow (5–15 s per call) and occasionally return gateway timeouts. The tool is designed to stay within Vercel's 60 s serverless function limit while being as resilient as possible.
 
-1. Running all API calls sequentially (one at a time), never in parallel bursts
-2. Waiting 600 ms between each engine call within a brand's prompt fetch
-3. Waiting 600 ms between brands during discovery
-4. Automatically retrying on rate-limit responses (HTTP 429 or rate-limit 500) with exponential backoff: 3 s → 6 s → 12 s
+### Leaderboard fetching
 
-This means a full analysis for three brands takes approximately 20–30 seconds end to end, but results appear progressively as each step completes.
+The leaderboard is fetched once per engine (5 engines total) in **parallel** via `Promise.allSettled`. Each call has a hard 12 s `AbortController` timeout and no retries. Total wall-clock time is the slowest single engine call, not the sum — typically 6–12 s.
+
+If some engines time out, data is returned from the engines that did succeed. Only if all 5 engines fail does the leaderboard step error out. This means partial data (a `—` cell for one engine) is treated as a success rather than a hard failure.
+
+All input domains always appear in the SOV table — even if SE Ranking does not return citation data for one of them. Domains with zero brand_presence are appended to the ranked list with 0% rather than being omitted.
+
+### Prompts fetching
+
+Each brand's prompts are fetched across 5 engines with **staggered parallelism**: engines start 200 ms apart (0, 200, 400, 600, 800 ms) and run concurrently. This avoids bursting all 5 requests simultaneously, which would trigger rate-limit responses and cause some engines to be silently dropped. Each engine call has a 15 s timeout and 1 retry with exponential backoff + random jitter (to prevent concurrent callers from re-colliding on the exact same retry slot).
+
+Brands are fetched sequentially, with a 600 ms gap between brands, to further reduce rate-limit pressure.
+
+### Retries and error handling
+
+- Transient errors (HTTP 429, 500 with "too many requests", 502, 503, 504) are retried automatically
+- Retry delays use exponential backoff with random jitter to avoid thundering herd
+- Each individual engine failure is isolated — one engine failing does not abort the other four
+- Friendly error messages are shown for common failure modes (rate limit hit, invalid API key, SE Ranking unavailable)
 
 ---
 
