@@ -587,8 +587,11 @@ export default function HomePage() {
   const [apiKey, setApiKey]         = useState("");
   const [country, setCountry]       = useState("US");
   const [targetDomain, setTarget]   = useState("");
+  const [targetBrand, setTargetBrand]   = useState("");
   const [competitor1, setComp1]     = useState("");
+  const [comp1Brand, setComp1Brand] = useState("");
   const [competitor2, setComp2]     = useState("");
+  const [comp2Brand, setComp2Brand] = useState("");
   const [topicFilter, setTopic]     = useState("");
 
   const [running, setRunning]           = useState(false);
@@ -625,7 +628,12 @@ export default function HomePage() {
 
     const trimmedKey  = apiKey.trim();
     const isDemo      = !trimmedKey;
-    const rawDomains  = [targetDomain, competitor1, competitor2].map(cleanDomain).filter(Boolean);
+    const domainInputs = [
+      { domain: targetDomain, brandOverride: targetBrand },
+      { domain: competitor1,  brandOverride: comp1Brand },
+      { domain: competitor2,  brandOverride: comp2Brand },
+    ];
+    const rawDomains  = domainInputs.map(({ domain }) => cleanDomain(domain)).filter(Boolean);
     const validDomains = rawDomains.filter((d) => DOMAIN_RE.test(d));
 
     try {
@@ -664,9 +672,18 @@ export default function HomePage() {
       } else {
         // ── Live mode ────────────────────────────────────────────────────────
 
-        // Step 1: Discover brand names
+        // Step 1: Discover brand names (skip API call when user provided an override)
         const discovered: { domain: string; brand: string }[] = [];
-        for (const domain of validDomains) {
+        for (const { domain: rawDomain, brandOverride } of domainInputs) {
+          const domain = cleanDomain(rawDomain);
+          if (!domain || !DOMAIN_RE.test(domain)) continue;
+          const override = brandOverride.trim();
+          if (override) {
+            discovered.push({ domain, brand: override });
+            pushStep(`${domain} → ${override} (manual)`);
+            resolveStep(discovered.length - 1, `${domain} → ${override} (manual)`);
+            continue;
+          }
           const si = pushStep(`Identifying ${domain}…`);
           const res = await fetch("/api/discover", {
             method: "POST",
@@ -724,10 +741,14 @@ export default function HomePage() {
     } finally {
       setRunning(false);
     }
-  }, [apiKey, country, targetDomain, competitor1, competitor2, topicFilter]);
+  }, [apiKey, country, targetDomain, targetBrand, competitor1, comp1Brand, competitor2, comp2Brand, topicFilter]);
 
   const clear = useCallback(() => {
-    setApiKey(""); setCountry("US"); setTarget(""); setComp1(""); setComp2(""); setTopic("");
+    setApiKey(""); setCountry("US");
+    setTarget(""); setTargetBrand("");
+    setComp1(""); setComp1Brand("");
+    setComp2(""); setComp2Brand("");
+    setTopic("");
     setOverview(null); setPromptsBrands([]); setError(null); setSteps([]);
     setActiveTab("overview");
   }, []);
@@ -777,28 +798,57 @@ export default function HomePage() {
                 className="w-full bg-input border border-border rounded px-4 py-2.5 text-sm text-text placeholder-muted focus:outline-none focus:border-border-bright transition-colors" />
             </div>
 
+            {/* Domain + optional brand override — shown as a pair per row */}
             <div>
               <Label>Target Domain</Label>
-              <input type="text" placeholder="e.g. sony.com"
+              <input type="text" placeholder="e.g. napaonline.com"
                 value={targetDomain} onChange={(e) => setTarget(e.target.value)}
                 maxLength={120}
+                className="w-full bg-input border border-border rounded px-4 py-2.5 text-sm text-text placeholder-muted focus:outline-none focus:border-border-bright transition-colors" />
+            </div>
+            <div>
+              <Label>Brand name (optional)</Label>
+              <input type="text" placeholder="e.g. NAPA Auto Parts"
+                value={targetBrand} onChange={(e) => setTargetBrand(e.target.value)}
+                maxLength={80}
                 className="w-full bg-input border border-border rounded px-4 py-2.5 text-sm text-text placeholder-muted focus:outline-none focus:border-border-bright transition-colors" />
             </div>
 
             <div>
               <Label>Competitor 1</Label>
-              <input type="text" placeholder="e.g. samsung.com"
+              <input type="text" placeholder="e.g. autozone.com"
                 value={competitor1} onChange={(e) => setComp1(e.target.value)}
                 maxLength={120}
+                className="w-full bg-input border border-border rounded px-4 py-2.5 text-sm text-text placeholder-muted focus:outline-none focus:border-border-bright transition-colors" />
+            </div>
+            <div>
+              <Label>Brand name (optional)</Label>
+              <input type="text" placeholder="e.g. AutoZone"
+                value={comp1Brand} onChange={(e) => setComp1Brand(e.target.value)}
+                maxLength={80}
                 className="w-full bg-input border border-border rounded px-4 py-2.5 text-sm text-text placeholder-muted focus:outline-none focus:border-border-bright transition-colors" />
             </div>
 
             <div>
               <Label>Competitor 2</Label>
-              <input type="text" placeholder="e.g. lg.com"
+              <input type="text" placeholder="e.g. oreillyauto.com"
                 value={competitor2} onChange={(e) => setComp2(e.target.value)}
                 maxLength={120}
                 className="w-full bg-input border border-border rounded px-4 py-2.5 text-sm text-text placeholder-muted focus:outline-none focus:border-border-bright transition-colors" />
+            </div>
+            <div>
+              <Label>Brand name (optional)</Label>
+              <input type="text" placeholder="e.g. O&apos;Reilly Auto Parts"
+                value={comp2Brand} onChange={(e) => setComp2Brand(e.target.value)}
+                maxLength={80}
+                className="w-full bg-input border border-border rounded px-4 py-2.5 text-sm text-text placeholder-muted focus:outline-none focus:border-border-bright transition-colors" />
+            </div>
+
+            <div className="sm:col-span-2">
+              <p className="text-muted text-xs leading-relaxed">
+                Brand names are auto-detected from each domain. Override them if the domain name doesn&apos;t match the brand
+                (e.g. <span className="text-text">napaonline.com</span> → <span className="text-text">NAPA Auto Parts</span>).
+              </p>
             </div>
 
             <div>

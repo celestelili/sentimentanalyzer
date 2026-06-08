@@ -287,6 +287,37 @@ async function fetchWithRetry(
   return fetch(url, init);
 }
 
+// Words that SE Ranking commonly returns for domain-suffixed brands
+// (e.g. "napaonline.com" → "Online", "bestbuy.com" → "Buy").
+// If the API returns only these, we fall through to the domain heuristic.
+const GENERIC_BRAND_TERMS = new Set([
+  "online", "shop", "store", "web", "digital", "direct", "central", "hub",
+  "zone", "world", "plus", "pro", "go", "app", "site", "now", "us", "uk",
+  "au", "ca", "co", "inc", "llc", "corp", "group", "buy", "mart", "deal",
+  "deals", "price", "prices", "savings", "sale", "sales", "market",
+]);
+
+// Strips common generic suffixes from a domain's first segment to recover
+// the meaningful brand root. E.g. "napaonline" → "napa", "autozone" is
+// unchanged because "zone" is only stripped when the remainder is non-empty.
+const DOMAIN_GENERIC_SUFFIXES = [
+  "online", "shop", "store", "digital", "direct", "central", "hub",
+  "zone", "world", "plus", "pro", "go", "app", "site", "now", "mart",
+];
+
+function brandFromDomain(domain: string): string {
+  const seg = domain.split(".")[0]; // e.g. "napaonline" from "napaonline.com"
+  const lower = seg.toLowerCase();
+  for (const suffix of DOMAIN_GENERIC_SUFFIXES) {
+    if (lower.endsWith(suffix) && lower.length > suffix.length) {
+      // Keep the prefix and capitalise its first letter.
+      const root = seg.slice(0, seg.length - suffix.length);
+      return root.charAt(0).toUpperCase() + root.slice(1);
+    }
+  }
+  return seg.charAt(0).toUpperCase() + seg.slice(1);
+}
+
 // GET /ai-search/brand/discover
 // Response: { brands: string[] }
 export async function discoverBrand(
@@ -303,8 +334,14 @@ export async function discoverBrand(
   if (!res.ok) await handleError(res);
 
   const data = await res.json() as { brands?: string[] };
-  // Fall back to capitalising the hostname if the API returns nothing
-  return data.brands?.[0] ?? domain.split(".")[0].replace(/^(.)/, (c) => c.toUpperCase());
+  // SE Ranking sometimes returns a generic word extracted from the domain
+  // (e.g. "Online" for napaonline.com). Walk the full brands array and return
+  // the first entry that isn't a known generic term; fall back to our own
+  // domain-heuristic when every suggestion is generic or the list is empty.
+  const nonGeneric = (data.brands ?? []).find(
+    (b) => b && !GENERIC_BRAND_TERMS.has(b.trim().toLowerCase())
+  );
+  return nonGeneric ?? brandFromDomain(domain);
 }
 
 // POST /ai-search/overview/leaderboard
