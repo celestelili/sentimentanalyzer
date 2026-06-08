@@ -295,6 +295,8 @@ const GENERIC_BRAND_TERMS = new Set([
   "zone", "world", "plus", "pro", "go", "app", "site", "now", "us", "uk",
   "au", "ca", "co", "inc", "llc", "corp", "group", "buy", "mart", "deal",
   "deals", "price", "prices", "savings", "sale", "sales", "market",
+  "parts", "auto", "motors", "automotive", "car", "cars", "truck", "trucks",
+  "supply", "supplies", "depot", "express", "source", "warehouse",
 ]);
 
 // Strips common generic suffixes from a domain's first segment to recover
@@ -303,6 +305,8 @@ const GENERIC_BRAND_TERMS = new Set([
 const DOMAIN_GENERIC_SUFFIXES = [
   "online", "shop", "store", "digital", "direct", "central", "hub",
   "zone", "world", "plus", "pro", "go", "app", "site", "now", "mart",
+  "parts", "auto", "motors", "automotive", "supply", "depot", "express",
+  "source", "warehouse",
 ];
 
 function brandFromDomain(domain: string): string {
